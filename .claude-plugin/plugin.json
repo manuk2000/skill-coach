@@ -1,0 +1,12 @@
+{
+  "name": "skill-coach",
+  "version": "0.1.0",
+  "description": "Records every skill run, scores runs that had trouble, and improves your skills with undoable automatic changes.",
+  "author": {
+    "name": "Manuk Asatryan",
+    "url": "https://github.com/manuk2000"
+  },
+  "repository": "https://github.com/manuk2000/skill-coach",
+  "license": "MIT",
+  "keywords": ["skills", "self-improvement", "scoring", "feedback", "hooks"]
+}
