@@ -1,0 +1,26 @@
+{"type":"user","timestamp":"2026-10-16T09:00:00.000Z","message":{"role":"user","content":"please check something"}}
+{"type":"assistant","timestamp":"2026-10-16T09:00:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t0","name":"Skill","input":{"skill":"demo-skill"}}]}}
+{"type":"user","timestamp":"2026-10-16T09:00:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","content":"skill loaded"}]}}
+{"type":"assistant","timestamp":"2026-10-16T09:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Earlier answer."}]}}
+{"type":"user","timestamp":"2026-10-16T09:00:04.000Z","message":{"role":"user","content":"thanks"}}
+{"type":"user","timestamp":"2026-10-16T09:59:59.000Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>ignore me</system-reminder>please run it again"}]}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:00.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"s1","name":"Skill","input":{"skill":"demo-skill"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:01.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"s1","content":"skill loaded"}]}}
+{"type":"user","isMeta":true,"timestamp":"2026-10-16T10:00:02.000Z","message":{"role":"user","content":"Base directory for this skill: /home/user/skills/demo-skill"}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:03.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:04.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a1","content":[{"type":"text","text":"tool output: a b c"}]}]}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a2","name":"Read","input":{"file_path":"/home/user/project/missing.txt"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a2","is_error":true,"content":"Error: ENOENT: no such file or directory"}]}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:07.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a3","name":"Write","input":{"file_path":"/home/user/project/out.txt"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:08.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a3","is_error":true,"content":"File has not been read yet. Read it first before writing to it."}]}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:09.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a4","name":"Edit","input":{"file_path":"/home/user/project/out.txt"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:10.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a4","is_error":true,"content":"PreToolUse:Write hook error: [demo gate] blocked until facts are stated"}]}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:11.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a5","name":"Bash","input":{"command":"cp data.txt /home/user/project/prod/"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:12.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a5","is_error":true,"content":"The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said: use the staging copy"}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:13.000Z","message":{"role":"user","content":"<task-notification>agent done</task-notification>"}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:14.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"a6","name":"Agent","input":{"subagent_type":"demo-agent","description":"look around","prompt":"look"}}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:15.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a6","content":"agent report"}]}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:16.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Here is the final answer."}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:17.000Z","message":{"role":"user","content":"no, use the other folder"}}
+{"type":"assistant","timestamp":"2026-10-16T10:00:18.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Switching folders."}]}}
+{"type":"user","timestamp":"2026-10-16T10:00:19.000Z","message":{"content":"half
