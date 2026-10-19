@@ -4,7 +4,7 @@ A Claude Code plugin that helps your own skills get better through use.
 
 It records every skill run, scores the runs that had trouble, and improves the skill
 for you: **text fixes are applied automatically, logic fixes too unless you turn that
-off for a skill.** Every change is backed up, logged and can be undone with one
+off for a skill.** Every change is logged with its before and after text and can be undone with one
 command. Its records stay in a private folder on your machine; the only thing sent
 anywhere is what Claude reads during your normal session.
 
@@ -112,6 +112,7 @@ Commands:
 |---|---|---|
 | `/skill-coach:analyze` | `[skill] [session \| 7d \| 30d \| all]` | all skills, `session` |
 | `/skill-coach:undo` | `[change-id]` | the last change |
+| `/skill-coach:connect` | `[skill] [--root user \| project]` | no name: list unconnected skills |
 
 ## Data folder
 

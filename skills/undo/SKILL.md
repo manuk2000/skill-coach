@@ -21,12 +21,14 @@ argument-hint: "[change-id]"
    check every pair before reverting any, then revert them last pair first. Read the
    file. It must contain each `after` text exactly once. If it does not — the file changed since, or the text
    appears more than once — restore nothing. Say so, and name the safety copy (the
-   entry's `- backup:` line) so the user can restore by hand.
+   entry's `- backup:` line; a `connect` entry has none, so show its `before` texts)
+   so the user can restore by hand.
 3. Edit the file: replace the `after` text with the `before` text. Never write a
    whole file back — edits made since elsewhere in the file must stay.
 4. Edit the entry's header status from `done` to `undone` and add
    `- undone: <today> (by the user)`.
-5. In `<data_dir>/notes/<skill>.md`, Edit the key's entry: `- status:` becomes
+5. Skip this step for a `connect` entry — it has no key. Otherwise, in
+   `<data_dir>/notes/<skill>.md`, Edit the key's entry: `- status:` becomes
    `rejected-by-undo`, and add the line `- rejected-by-undo: <today> (<change id>)`.
    That line is what counts this undo as a rejection of the fix.
 6. Say in one line what was reverted: *"Reverted `<change id>` in `<file>`."*

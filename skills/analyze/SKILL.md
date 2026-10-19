@@ -45,12 +45,13 @@ approve or reject each, in one message, and wait for the answer.
 ## 3. Rates per skill
 
 For the period, per skill: runs (`run` lines in `ledger.jsonl`), scored runs (rows in
-the notes' Scores table), changes applied (`done` in `changes.md`), changes undone
+the notes' Scores table), changes applied (`done` in `changes.md`, not counting kind
+`connect`), changes undone
 (`undone`), proposals waiting. A table, with denominators.
 
 Count **rejections** from the `- rejected-by-undo:` lines in the notes — only the undo
 skill writes them, so a recovered or failed change is never counted as a rejection.
-For each change the user undid, read the same section of the file now. If the user
+For each change the user undid (not kind `connect`), read the same section of the file now. If the user
 has since changed it themselves, that is an **edit**: add
 `- edited: <today> (<change id>): <one line on what the user wrote instead>` under the
 key in the notes (once per change), and show the difference.

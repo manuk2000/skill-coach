@@ -16,7 +16,9 @@ argument-hint: "[skill] [--root user|project]"
 - `data_dir` = `~/.claude/self-improvement` (expand `~`).
 - `plan` = `node <plugin_root>/scripts/connect-plan.js` — read-only; it prints JSON.
 
-Nothing in the user's skill changes until step 5, and only after the user says yes.
+Nothing in the skill's `SKILL.md` changes until step 5, and only after the user says
+yes. The rubric (step 2) and the config entry (step 3) are written earlier, and undo
+leaves them in place.
 
 ## 0. No skill named
 
@@ -50,35 +52,43 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
 ## 3. The one question
 
 If `<data_dir>/config.json` has no `logic_auto` for this skill, ask: *"Auto-improvement
-of logic is on for `<skill>`. Turn it off?"* — and wait for the answer. Save it as
-`"<skill>": { "logic_auto": "on" | "off" }` under `skills`, with the Write or Edit tool.
+of logic is on for `<skill>`. Turn it off?"* — and wait for the answer; an unclear
+answer means `on`. Add the key `"logic_auto": "on" | "off"` to the skill's entry under
+`skills` with the Edit tool, keeping any other keys that entry already has.
 Create the file as
 `{"defaults":{"text_auto":"on","logic_auto":"on","score_after_run":"on"},"skills":{}}`
 first if it does not exist.
 
 ## 4. Preview
 
-Run `<plan>` again with `--hand-over "<the agreed hand-over line>"`. Show both edits
-from `edits` exactly as before → after: first the frontmatter, then the
-`## Self-improvement` section (`sectionMode` says whether it replaces an old section or
-is added at the end). Ask one question: *"Connect `<skill>` with these two changes?"*
+Write the agreed hand-over line to `<data_dir>/tmp/hand-over.txt` with the Write tool,
+then run `<plan>` again with the same `--cwd`/`--root` plus
+`--hand-over-file <data_dir>/tmp/hand-over.txt`. Never pass the line as a shell
+argument — backticks and `$` in it would be expanded. Show every edit in `edits`
+exactly as before → after: first the frontmatter, then the `## Self-improvement`
+section. `sectionMode` says whether the section replaces an old one, is added at the
+end, or is `keep` (it already matches, so only the frontmatter changes). Ask one question: *"Connect `<skill>` with these two changes?"*
 No yes → stop.
 
 ## 5. Apply
 
 1. Append one entry to `<data_dir>/changes.md` in the worker's format (see
    `<plugin_root>/agents/worker.md`, Formats), with status `started`, kind `connect`,
-   and both edits as numbered pairs `before 1:`/`after 1:` and `before 2:`/`after 2:`.
-   Create the file with its title and anchor first if it does not exist.
-2. Apply `edits[0]`, then `edits[1]`, with the Edit tool, using `old_string` and
-   `new_string` exactly as printed — never retype or reflow them.
-3. Both succeeded → set the entry to `done`. One failed → Edit any applied pair back
+   and each edit as a numbered pair (`before 1:`/`after 1:`, `before 2:`/`after 2:` —
+   one pair when `sectionMode` is `keep`). Create the file with its title and anchor
+   first if it does not exist.
+2. Read `file` with the Read tool now — the Edit tool needs it, and it catches a file
+   that changed since the preview.
+3. Apply the edits in order with the Edit tool, using `old_string` and `new_string`
+   exactly as printed — never retype or reflow them.
+4. All succeeded → set the entry to `done`. One failed → Edit any applied pair back
    (`after` → `before`), set the entry to `undone` with `- failed: <why>`, and stop.
 
 ## 6. Confirm
 
-Run `<plan> --skill <name>` once more. `state` must now be `connected`. Then say in
-one line: *"Connected `<skill>`. Every run is recorded; a run with trouble is scored.
+Run `<plan>` once more with the same `--cwd` and `--root`. Both `state: "connected"`
+and `hookConnected: true` are required. If either is missing, say the skill did not
+connect and point to `/skill-coach:undo <change id>`. Otherwise say in one line: *"Connected `<skill>`. Every run is recorded; a run with trouble is scored.
 Undo with `/skill-coach:undo <change id>`."*
 
 ## Rules

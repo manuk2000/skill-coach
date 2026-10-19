@@ -45,7 +45,18 @@ write a backup over a file. For each entry, Read the file:
 - neither → leave the file alone, set the status to `undone`, add
   `- recovery-skipped: <date> (the file changed since)`, and say so in the footer.
 
-A recovered entry is not a rejection; only an undo by the user counts as one.
+An entry with numbered pairs (kind `connect`, written by the connect skill) is
+recovered as a whole. Check every pair first:
+
+- every `after` is in the file → the connect fully landed: set the status to `done`
+  and add `- completed: <date> (the connect had fully landed)`;
+- every `before` is still there → nothing landed: set `undone` with `- recovered: <date>`;
+- some landed → Edit the landed pairs back, last pair first, and set `undone` with
+  `- recovered: <date>`;
+- anything else → leave the file alone and mark it `recovery-skipped` as above.
+
+Say what happened in the footer. A recovered entry is not a rejection; only an undo by
+the user counts as one.
 
 ## 2. Route
 
