@@ -66,6 +66,12 @@ function startsRun(entry, skill) {
   return false;
 }
 
+function isCoachCall(entry) {
+  const c = entry.message && entry.message.content;
+  return entry.type === 'assistant' && Array.isArray(c) && c.some((x) => x && x.type === 'tool_use'
+    && x.name === 'Skill' && x.input && typeof x.input.skill === 'string' && x.input.skill.startsWith('skill-coach:'));
+}
+
 function emptyFacts(skill) {
   return {
     skill, found: false, start_time: null, end_time: null, tool_calls: 0, tool_errors: [],
@@ -93,11 +99,22 @@ function readRun(lines, skill) {
   facts.start_time = entries[start].timestamp || null;
   const toolNames = {};
   let sawAssistantText = false;
-  let end = entries.length - 1;
+  // skill-coach's own end-of-run call closes the run; nothing after it is the skill's work.
+  const marker = entries.findIndex((e, i) => i > start && isCoachCall(e));
+  let end = marker >= 0 ? marker : entries.length - 1;
+  let turnTexts = [];
 
   for (let i = start; i < entries.length; i++) {
     const e = entries[i];
     const content = e.message && e.message.content;
+    if (marker >= 0 && i >= marker) {
+      // Past the end-of-run call, keep only the user's next message (a correction).
+      const text = i === marker ? null : genuineUserText(e);
+      if (text === null) continue;
+      facts.user_messages.push({ text: clip(text, 500), likely_correction: isLikelyCorrection(text) });
+      end = i;
+      break;
+    }
     if (e.type === 'assistant' && Array.isArray(content)) {
       for (const item of content) {
         if (!item) continue;
@@ -110,7 +127,7 @@ function readRun(lines, skill) {
           }
         } else if (item.type === 'text' && item.text) {
           sawAssistantText = true;
-          facts.final_answer = clip(item.text, 4000);
+          turnTexts.push(item.text);
         }
       }
       continue;
@@ -138,12 +155,17 @@ function readRun(lines, skill) {
     const text = genuineUserText(e);
     if (text === null) continue;
     facts.user_messages.push({ text: clip(text, 500), likely_correction: isLikelyCorrection(text) });
-    if (sawAssistantText) {
+    if (marker < 0 && sawAssistantText) {
+      // No end-of-run call recorded: the user's first reply after an answer ends the run.
       end = i;
       break;
     }
+    turnTexts = [];
   }
 
+  // The answer is everything the assistant said in its final turn.
+  const answer = turnTexts.join('\n\n');
+  facts.final_answer = answer.length > 4000 ? answer.slice(-4000) : answer;
   facts.end_time = entries[end].timestamp || null;
   return facts;
 }

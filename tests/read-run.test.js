@@ -87,6 +87,57 @@ test('corrections vs false positives', () => {
   }
 });
 
+const assistantTool = (ts, id, name, input) => JSON.stringify({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } });
+const toolResult = (ts, id, content, isError = false) => userLine(ts, [{ type: 'tool_result', tool_use_id: id, is_error: isError, content }]);
+
+test('stops at the run-end call and keeps the real answer', () => {
+  const r = readRun([
+    assistantTool('a0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('a1', 's1', 'loaded'),
+    assistantTool('a2', 'b1', 'Bash', {}), toolResult('a3', 'b1', 'ok'),
+    assistantText('a4', 'The real answer.'),
+    assistantText('a5', 'Now running the end-of-run check.'),
+    assistantTool('a6', 'r1', 'Skill', { skill: 'skill-coach:run-end' }), toolResult('a7', 'r1', 'loaded'),
+    assistantTool('a8', 'j1', 'Agent', { subagent_type: 'skill-coach:judge', description: 'score' }), toolResult('a9', 'j1', '{}'),
+  ], 'demo-skill');
+  assert.equal(r.tool_calls, 2);
+  assert.deepEqual(r.subagents, []);
+  assert.ok(r.final_answer.includes('The real answer.'));
+});
+
+test('a correction after the footer is kept and the footer is not the answer', () => {
+  const r = readRun([
+    assistantTool('b0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('b1', 's1', 'loaded'),
+    assistantText('b2', 'The real answer.'),
+    assistantTool('b3', 'r1', 'Skill', { skill: 'skill-coach:run-end' }), toolResult('b4', 'r1', 'loaded'),
+    assistantTool('b5', 'j1', 'Agent', { subagent_type: 'skill-coach:judge', description: 'score' }), toolResult('b6', 'j1', '{}'),
+    assistantTool('b7', 'w1', 'Agent', { subagent_type: 'skill-coach:worker', description: 'apply' }), toolResult('b8', 'w1', 'footer'),
+    assistantText('b9', '🟡 6/10 · Changed SKILL.md → «x» · Undo: /skill-coach:undo'),
+    userLine('b10', 'no, use the other folder'),
+    assistantTool('b11', 'r2', 'Skill', { skill: 'skill-coach:run-end' }),
+  ], 'demo-skill');
+  assert.ok(r.final_answer.includes('The real answer.'));
+  assert.ok(!r.final_answer.includes('6/10'));
+  assert.deepEqual(r.subagents, []);
+  assert.equal(r.tool_calls, 1);
+  assert.deepEqual(r.user_messages.at(-1), { text: 'no, use the other folder', likely_correction: true });
+  assert.equal(r.end_time, 'b10');
+});
+
+test('a question mid-run does not end the run when run-end follows', () => {
+  const r = readRun([
+    assistantTool('c0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('c1', 's1', 'loaded'),
+    assistantText('c2', 'Which folder?'),
+    userLine('c3', 'the second one'),
+    assistantTool('c4', 'b1', 'Bash', {}), toolResult('c5', 'b1', 'Error: boom', true),
+    assistantText('c6', 'Done: here is the answer.'),
+    assistantTool('c7', 'r1', 'Skill', { skill: 'skill-coach:run-end' }),
+  ], 'demo-skill');
+  assert.equal(r.tool_errors.length, 1);
+  assert.equal(r.final_answer, 'Done: here is the answer.');
+  assert.deepEqual(r.user_messages, [{ text: 'the second one', likely_correction: false }]);
+  assert.equal(r.end_time, 'c7');
+});
+
 test('CLI prints facts for a readable transcript', () => {
   const r = spawnSync(process.execPath, [SCRIPT, '--transcript', FIXTURE, '--skill', 'demo-skill'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
