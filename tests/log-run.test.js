@@ -115,6 +115,24 @@ test('a typed spot check uses the UserPromptSubmit event name', () => {
   assert.equal(JSON.parse(r.output).hookSpecificOutput.hookEventName, 'UserPromptSubmit');
 });
 
+test('every run of a connected skill is announced with its session', () => {
+  const s = setup();
+  s.writeSkill(s.home, 'demo-skill', CONNECTED);
+  const r = main('tool', s.event('event-pretooluse-skill.json'), s.env, NOW);
+  assert.equal(r.line.n, 1);
+  const text = JSON.parse(r.output).hookSpecificOutput.additionalContext;
+  assert.match(text, /run 1 of demo-skill recorded \(session 00000000-0000-0000-0000-000000000000\)/);
+  assert.match(text, /skill-coach:run-end/);
+  assert.doesNotMatch(text, /spot check/);
+});
+
+test('a connected run inside a subagent names the agent', () => {
+  const s = setup();
+  s.writeSkill(s.home, 'demo-skill', CONNECTED);
+  const r = main('tool', s.event('event-pretooluse-skill-subagent.json'), s.env, NOW);
+  assert.match(JSON.parse(r.output).hookSpecificOutput.additionalContext, /agent a0000000000000001/);
+});
+
 test('10th run of an unconnected skill prints nothing', () => {
   const s = setup();
   s.writeSkill(s.home, 'demo-skill', '---\nname: demo-skill\n---\n# Demo\n');

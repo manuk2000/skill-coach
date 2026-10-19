@@ -4,8 +4,8 @@
 // Hook script: records one ledger line per skill run, at zero AI cost.
 //   node log-run.js tool    — PreToolUse on the Skill tool
 //   node log-run.js typed   — UserPromptSubmit (only prompts starting with "/")
-// It must never get in the way of a skill: it always exits 0 and prints nothing,
-// except the spot-check note on every 10th run of a connected skill.
+// It must never get in the way of a skill: it always exits 0, and prints only a short
+// note for a connected skill (which run this is, plus a spot check every 10th run).
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -116,11 +116,15 @@ function main(mode, stdinText, env, now) {
     fs.appendFileSync(ledger, JSON.stringify(line) + '\n');
 
     let output = null;
-    if (n % SPOT_CHECK_EVERY === 0 && isConnected(skill, cwd, home)) {
+    if (isConnected(skill, cwd, home)) {
+      // Tells the chat which run this is, so run-end scores this session's run.
+      const who = `session ${line.session}${line.agent ? `, agent ${line.agent}` : ''}`;
+      let note = `skill-coach: run ${n} of ${skill} recorded (${who}). At the end of this run, invoke skill-coach:run-end.`;
+      if (n % SPOT_CHECK_EVERY === 0) note += ` skill-coach: spot check due for ${skill} — score this run even if nothing went wrong.`;
       output = JSON.stringify({
         hookSpecificOutput: {
           hookEventName: mode === 'typed' ? 'UserPromptSubmit' : 'PreToolUse',
-          additionalContext: `skill-coach: spot check due for ${skill} (run ${n}). At the end of this run, score it even if nothing went wrong.`,
+          additionalContext: note,
         },
       });
     }
