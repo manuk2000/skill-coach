@@ -23,11 +23,17 @@ Follow these steps in order. Most runs stop at step 3, which costs nothing.
 
 ## 2. Find the run
 
-Grep `<data_dir>/ledger.jsonl` for `"skill":"<skill>"` and take the **last** match.
-Its `session` is `session_id` and its `transcript` is `transcript_path`.
+When the skill started, the hook added a note: *"skill-coach: run `<n>` of `<skill>`
+recorded (session `<id>`[, agent `<id>`])"*. Take `session_id` — and the agent id, if
+the note names one — from the latest such note for this skill.
 
-No match → print one line, *"skill-coach: no ledger entry for `<skill>` — is the
-plugin's hook installed?"*, and stop.
+Then Grep `<data_dir>/ledger.jsonl` for lines that contain `"skill":"<skill>"` and
+`"session":"<session_id>"` — plus `"agent":"<agent id>"` when the note named one, or
+no `"agent"` at all when it did not — and take the **last** match. Its `transcript`
+is `transcript_path`. Never use a line from another session.
+
+No note or no match → print one line, *"skill-coach: no ledger entry for `<skill>` in
+this session — is the plugin's hook installed?"*, and stop.
 
 ## 3. Trouble test
 
@@ -75,7 +81,9 @@ Take the last fenced `json` block of its answer as `decision`.
 ## 6. Worker
 
 Call the subagent `skill-coach:worker` in the foreground. Pass `plugin_root`,
-`data_dir`, `skill`, `skill_dir`, `session_id` and `decision`.
+`data_dir`, `skill`, `skill_dir`, `rubric_path`, `session_id` and `decision`. On a
+`correction` re-run, also pass `replaces`: the fix id in this session's Scores row for
+the skill (`none` when that row has none).
 
 ## 7. Footer
 

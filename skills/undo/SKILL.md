@@ -16,16 +16,15 @@ argument-hint: "[change-id]"
 ## Steps
 
 1. Show the entry in two lines: the file and the change's before → after.
-2. **Check before touching anything.**
-   - The backup named in the entry's `- backup:` line must exist under `data_dir`.
-   - The file must still contain the entry's `after` text exactly. If it does not,
-     someone changed the file since; restoring the backup would throw that work
-     away.
-   - If either check fails, restore nothing. Say which check failed and where the
-     backup is, so the user can restore by hand.
-3. Read the backup and Write its content over the file.
+2. **Check before touching anything.** Read the file. It must contain the entry's
+   `after` text exactly once. If it does not — the file changed since, or the text
+   appears more than once — restore nothing. Say so, and name the safety copy (the
+   entry's `- backup:` line) so the user can restore by hand.
+3. Edit the file: replace the `after` text with the `before` text. Never write a
+   whole file back — edits made since elsewhere in the file must stay.
 4. Edit the entry's header status from `done` to `undone` and add
-   `- undone: <today>`.
-5. In `<data_dir>/notes/<skill>.md`, Edit the key's entry so `- status:` reads
-   `rejected-by-undo`. The undo counts as a rejection of that fix.
-6. Say in one line what was restored: *"Restored `<file>` from `<change id>`."*
+   `- undone: <today> (by the user)`.
+5. In `<data_dir>/notes/<skill>.md`, Edit the key's entry: `- status:` becomes
+   `rejected-by-undo`, and add the line `- rejected-by-undo: <today> (<change id>)`.
+   That line is what counts this undo as a rejection of the fix.
+6. Say in one line what was reverted: *"Reverted `<change id>` in `<file>`."*

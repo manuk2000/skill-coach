@@ -36,8 +36,8 @@ when one is given), each with its before → after, why and evidence. Ask the us
 approve or reject each, in one message, and wait for the answer.
 
 - **Approve** → call the subagent `skill-coach:worker` with `plugin_root`,
-  `data_dir`, the proposal's skill and `skill_dir`, `session_id`, `decision: null`
-  and `approved: <proposal id>`. Print its footer.
+  `data_dir`, the proposal's skill with its `skill_dir` and `rubric_path`,
+  `session_id`, `decision: null` and `approved: <proposal id>`. Print its footer.
 - **Reject** → Edit the proposal's status to `rejected`, add
   `- reason: <the user's words>`, and set the key's status in the notes back to
   `open`.
@@ -48,9 +48,12 @@ For the period, per skill: runs (`run` lines in `ledger.jsonl`), scored runs (ro
 the notes' Scores table), changes applied (`done` in `changes.md`), changes undone
 (`undone`), proposals waiting. A table, with denominators.
 
-An undo counts as a **rejection** of the fix it reverted. An undo followed by the
-user's own change to the same section counts as an **edit** — show the difference
-between the proposed and the applied text when you can see both.
+Count **rejections** from the `- rejected-by-undo:` lines in the notes — only the undo
+skill writes them, so a recovered or failed change is never counted as a rejection.
+For each change the user undid, read the same section of the file now. If the user
+has since changed it themselves, that is an **edit**: add
+`- edited: <today> (<change id>): <one line on what the user wrote instead>` under the
+key in the notes (once per change), and show the difference.
 
 ## 4. Repeats
 

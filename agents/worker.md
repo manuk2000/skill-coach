@@ -24,19 +24,28 @@ run and you never ask the user anything.
 | `data_dir` | the private data folder |
 | `skill` | the skill's name |
 | `skill_dir` | the skill's own folder |
+| `rubric_path` | the skill's rubric file — a fix to it always becomes a proposal |
 | `session_id` | the session id |
-| `decision` | the judge's decision JSON |
+| `decision` | the judge's decision JSON (`null` when `approved` is given) |
 | `approved` | optional — a proposal id (`P-…`) the user approved in `analyze` |
+| `replaces` | optional — on a correction re-run, the fix id already recorded for this run, or `none` |
 
 Today's date is written `YYYY-MM-DD`; ids use it as `YYYYMMDD`.
 
 ## 1. Recover
 
 Before anything else, look in `<data_dir>/changes.md` for entries of this skill whose
-header ends in `· started`. Each one is a change an earlier run began and never
-finished. For each: if its backup exists, Write the backup's content over the file,
-then change the header's status to `undone` and add the line
-`- recovered: <date> (an earlier run stopped half-way)`.
+header ends in `· started` — changes an earlier run began and never finished. Never
+write a backup over a file. For each entry, Read the file:
+
+- it contains the entry's `after` text exactly once → Edit `after` back to `before`,
+  set the status to `undone`, add `- recovered: <date> (an earlier run stopped half-way)`;
+- it contains the `before` text (the edit never landed) → set the status to `undone`,
+  add `- recovered: <date> (the edit never landed)`;
+- neither → leave the file alone, set the status to `undone`, add
+  `- recovery-skipped: <date> (the file changed since)`, and say so in the footer.
+
+A recovered entry is not a rejection; only an undo by the user counts as one.
 
 ## 2. Route
 
@@ -47,8 +56,10 @@ the value under `defaults`; a missing file or field means `on`. Then follow the
 "Where a fix goes" table in `<plugin_root>/criteria/general.md`:
 
 - `decision.report` is set, or `decision.fix` is `null` → no change; go to step 5.
-- the fix's file is the skill's `references/rubric.md`, or lies outside `skill_dir`,
-  or lies under `plugin_root` → step 4 (propose).
+- the fix's file is `rubric_path`, or lies outside `skill_dir`, or lies under
+  `plugin_root` → step 4 (propose).
+- `replaces` names a change whose status is `done` → step 4 (propose): one run never
+  gets a second change.
 - `kind` is `text` and `text_auto` is `on` → step 3 (apply); `off` → step 4.
 - `kind` is `logic` and `logic_auto` is `on` → step 3; `off` → step 4.
 
@@ -58,8 +69,11 @@ the value under `defaults`; a missing file or field means `on`. Then follow the
    starting at `001`.
 2. Append the entry to `changes.md` with status `started` (see Formats; create the
    file first if it does not exist).
-3. Read the target file and Write an exact copy to
-   `<data_dir>/backups/<change id>/<file name>`.
+3. Write a safety copy of the target file to
+   `<data_dir>/backups/<change id>/<file name>`. It is for manual recovery only:
+   nothing ever writes it back automatically — undo and recovery use the entry's
+   `before` and `after`. Never Edit the target unless the `started` entry from step 2,
+   with its exact `before` and `after`, is written.
 4. Edit the target file: replace `before` with `after`. `before` must occur exactly
    once. If it is not found, do not change the file: set the entry's status to
    `undone`, add `- failed: the before text was not found`, and say so in the footer.
@@ -67,11 +81,17 @@ the value under `defaults`; a missing file or field means `on`. Then follow the
 6. In the notes, set the fix key's `- last-fixed-by:` to the change id and its
    `- status:` to `fixed`.
 
-When `approved` is given: read that proposal from `proposals.md`. If its file lies
-under `plugin_root`, do not apply it — set the proposal to `approved`, add
-`- apply-in-repo: change the plugin repo and release`, and say so in the footer.
-Otherwise apply it with steps 1–6 using the proposal's file, kind, before and after,
-then set the proposal's status to `approved` and add `- applied-as: <change id>`.
+When `approved` is given (from `analyze`; `decision` is `null`), read that proposal
+from `proposals.md`:
+
+- Its file lies under `plugin_root`, or outside `skill_dir` (a `CLAUDE.md`, memory,
+  settings) → do not apply it. Set the proposal to `approved`, add
+  `- apply-by-hand: <file>`, and use the "approved, apply by hand" footer.
+- Otherwise — including the skill's rubric, which the user has now approved — apply it
+  with steps 1–6 using the proposal's file, kind, before and after. Set the proposal
+  to `approved` and add `- applied-as: <change id>`.
+- Then skip steps 5 and 6: only set the key's `- status:` in the notes to `fixed`
+  (applied) or leave it `proposed` (by hand), and go to step 7.
 
 ## 4. Propose
 
@@ -88,16 +108,20 @@ does not exist. For every problem in `decision.problems`:
 - **Known key** (an entry `### <key>` exists): Edit that entry's block — the
   `old_string` starts at its `### <key>` line so it is unique — to add 1 to
   `- count:`, set `- last-seen:` to today, and add one line
-  `- seen <date>: <evidence, at most 200 characters>`.
+  `- seen <date> <first 8 characters of session_id>: <evidence, at most 200 characters>`.
+  On a correction re-run (`replaces` is given), a key that already has a `- seen`
+  line with this session's 8 characters is not counted again.
 - **New key**: append a new entry before `<!-- skill-coach:problems-end -->` with
   count 1, first-seen and last-seen today, `- last-fixed-by: none`, `- status: open`,
-  the evidence, and the suggested action (the fix's `why` when this is the fix's key,
-  otherwise `—`).
+  the suggested action (the fix's `why` when this is the fix's key, otherwise `—`),
+  and its first `- seen` line.
 
 ## 6. Score row
 
-Always — even when nothing changed. Append one row to the Scores table, before
-`<!-- skill-coach:scores-end -->`:
+Always — even when nothing changed — except when `approved` is given. Append one row
+to the Scores table, before `<!-- skill-coach:scores-end -->`. On a correction re-run
+(`replaces` is given), Edit this session's existing row for the skill instead of
+adding a second one:
 
 `| <date> | <first 8 characters of session_id> | <reason> | <result> | <efficiency> | <change or proposal id, or none> |`
 
@@ -113,6 +137,11 @@ Your final message is exactly one line:
 | broken setup | `⚠️ <report>` |
 | not scoreable | `n/a · <report or "run not found">` |
 | apply failed | `<band> <result>/10 · Fix not applied: the text changed (<C-id>)` |
+| approved and applied | `✓ <P-id> approved · applied as <C-id> · Undo: /skill-coach:undo` |
+| approved, apply by hand | `✓ <P-id> approved · apply by hand in <file name>` |
+
+When a recovery was skipped in step 1, add
+` · Recovery skipped for <C-id>: the file changed since` to the footer.
 
 ## 8. Formats
 
@@ -163,8 +192,8 @@ once it is decided.
 - last-seen: YYYY-MM-DD
 - last-fixed-by: <change id or none>
 - status: <open|fixed|proposed|rejected-by-undo>
-- evidence: <first evidence, at most 200 characters>
 - suggested action: <one line or —>
+- seen YYYY-MM-DD <session8>: <evidence, at most 200 characters>
 
 <!-- skill-coach:problems-end -->
 
@@ -174,6 +203,11 @@ once it is decided.
 |---|---|---|---|---|---|
 <!-- skill-coach:scores-end -->
 ```
+
+Lines added under a key later: one more `- seen …` line per run that hit it;
+`- rejected-by-undo: YYYY-MM-DD (<C-id>)`, written only by the undo skill; and
+`- edited: YYYY-MM-DD (<C-id>): <what the user wrote instead>`, written by analyze.
+Rejections and edits are counted from these lines.
 
 **Key rule.** A problem key is `area.symptom`: two parts, lowercase, words joined by
 hyphens.

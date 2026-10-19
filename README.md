@@ -5,7 +5,8 @@ A Claude Code plugin that helps your own skills get better through use.
 It records every skill run, scores the runs that had trouble, and improves the skill
 for you: **text fixes are applied automatically, logic fixes too unless you turn that
 off for a skill.** Every change is backed up, logged and can be undone with one
-command. Nothing you do ever leaves your machine.
+command. Its records stay in a private folder on your machine; the only thing sent
+anywhere is what Claude reads during your normal session.
 
 ## What happens in one run
 
@@ -130,7 +131,8 @@ edits to your skills folder and the data folder, for example in your user
 ```
 
 Without these you get a permission prompt per change. A change interrupted by a
-denied write is restored automatically at the next scoring.
+denied write is rolled back at the next scoring — but only while the file still holds
+that change; otherwise it is left alone and reported.
 
 ## How it decides
 
