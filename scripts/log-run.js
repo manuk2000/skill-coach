@@ -44,15 +44,21 @@ function skillFromEvent(mode, event, cwd, home) {
   return candidates.some(exists) ? name : null;
 }
 
+// The frontmatter's lines and the index of its closing line, or null. Shared with
+// connect-plan.js so "connected" means the same thing to both.
+function frontmatter(text) {
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/);
+  if (!/^---\s*$/.test(lines[0])) return null;
+  const end = lines.findIndex((l, i) => i > 0 && /^---\s*$/.test(l));
+  return end < 0 ? null : { lines, end };
+}
+
 function isConnected(skill, cwd, home) {
   if (!skill || skill.includes(':')) return false;
   for (const root of [home, cwd]) {
     try {
-      const text = fs.readFileSync(path.join(root, '.claude', 'skills', skill, 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
-      if (!text.startsWith('---\n')) continue;
-      const end = text.indexOf('\n---', 4);
-      if (end < 0) continue;
-      if (text.slice(4, end).split('\n').some((line) => line.startsWith('skill-coach:'))) return true;
+      const fm = frontmatter(fs.readFileSync(path.join(root, '.claude', 'skills', skill, 'SKILL.md'), 'utf8'));
+      if (fm && fm.lines.slice(1, fm.end).some((line) => line.startsWith('skill-coach:'))) return true;
     } catch {
       // Not in this folder.
     }
@@ -145,4 +151,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { dataDir, skillFromEvent, isConnected, countRuns, main };
+module.exports = { dataDir, skillFromEvent, frontmatter, isConnected, countRuns, main };

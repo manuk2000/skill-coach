@@ -142,6 +142,14 @@ test('10th run of an unconnected skill prints nothing', () => {
   assert.equal(r.output, null);
 });
 
+test('isConnected accepts a byte-order mark and a padded closing line', () => {
+  const s = setup();
+  s.writeSkill(s.home, 'bom-skill', `﻿${CONNECTED}`);
+  s.writeSkill(s.home, 'pad-skill', '---\nname: pad-skill\nskill-coach:\n  rubric: r.md\n--- \n# Pad\n');
+  assert.equal(isConnected('bom-skill', s.project, s.home), true);
+  assert.equal(isConnected('pad-skill', s.project, s.home), true);
+});
+
 test('isConnected reads CRLF frontmatter and ignores files without frontmatter', () => {
   const s = setup();
   s.writeSkill(s.home, 'crlf-skill', '---\r\nname: crlf-skill\r\nskill-coach:\r\n  rubric: references/rubric.md\r\n---\r\n# Demo\r\n');

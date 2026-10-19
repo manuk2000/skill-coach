@@ -117,6 +117,66 @@ test('listSkills shows unconnected skills, most used first', () => {
     ['used-a-lot', false, 3], ['used-once', false, 1], ['already-on', true, 1]]);
 });
 
+test('a byte-order mark and a padded closer still connect where the hook looks', () => {
+  const t = home();
+  const bom = `﻿${PLAIN}`;
+  t.put(t.h, 'bom-skill', applyAll(bom, planConnect(bom, {})));
+  assert.equal(isConnected('bom-skill', t.project, t.h), true);
+  const padded = '---\nname: pad-skill\n--- \n\n# Pad\n\nStep.\n\n---\n\nMore.\n';
+  const after = applyAll(padded, planConnect(padded, {}));
+  assert.match(after, /^---\nname: pad-skill\nskill-coach:\n {2}rubric: references\/rubric\.md\n--- \n/);
+  t.put(t.h, 'pad-skill', after);
+  assert.equal(isConnected('pad-skill', t.project, t.h), true);
+});
+
+test('fences of four backticks or tildes hide a template heading', () => {
+  for (const fence of ['````', '~~~']) {
+    const text = `${PLAIN}\n${fence}markdown\n\`\`\`yaml\nx: 1\n## Self-improvement\n\nTemplate.\n\`\`\`\n${fence}\n`;
+    const plan = planConnect(text, {});
+    assert.equal(plan.sectionMode, 'append', fence);
+    assert.ok(applyAll(text, plan).includes(`Template.\n\`\`\`\n${fence}\n`), fence);
+  }
+});
+
+test('only a real Self-improvement heading counts, and two of them are refused', () => {
+  const loop = `${PLAIN}\n## Self-improvement-loop design\n\nNotes.\n`;
+  assert.equal(planConnect(loop, {}).sectionMode, 'append');
+  const wiring = `${PLAIN}\n## Self-improvement wiring\n\nHow to wire.\n\n## Self-improvement (offer, never silent)\n\nOld.\n`;
+  const w = planConnect(wiring, {});
+  assert.equal(w.sectionMode, 'replace');
+  assert.equal(w.existingSection, '## Self-improvement (offer, never silent)\n\nOld.');
+  const two = `${PLAIN}\n## Self-improvement\n\nA.\n\n## Self-improvement\n\nB.\n`;
+  assert.match(planConnect(two, {}).error, /several/);
+});
+
+test('a following top-level heading is not swallowed', () => {
+  const text = `${PLAIN}\n## Self-improvement\n\nOld.\n\n# Appendix\n\nKeep.\n`;
+  const after = applyAll(text, planConnect(text, {}));
+  assert.ok(after.includes('# Appendix\n\nKeep.'));
+  assert.ok(!after.includes('Old.'));
+});
+
+test('an identical existing section is kept and only the frontmatter changes', () => {
+  const pointer = planConnect(PLAIN, {}).edits[1].new_string.replace(/^[\s\S]*?\n\n## Self-improvement/, '## Self-improvement');
+  const text = `${PLAIN}\n${pointer}\n`;
+  const plan = planConnect(text, {});
+  assert.equal(plan.sectionMode, 'keep');
+  assert.equal(plan.edits.length, 1);
+  assert.ok(plan.edits[0].new_string.includes('skill-coach:'));
+});
+
+test('CLI reads the hand-over line from a file and reports the hook view', () => {
+  const t = home();
+  t.put(t.h, 'demo-skill', PLAIN);
+  const hand = path.join(t.h, 'hand-over.txt');
+  fs.writeFileSync(hand, 'Hand over: the `date +%Y` line and the $HOME check\n');
+  const r = spawnSync(process.execPath, [SCRIPT, '--skill', 'demo-skill', '--cwd', t.project, '--hand-over-file', hand],
+    { env: { ...process.env, HOME: t.h, SKILL_COACH_DATA: path.join(t.h, 'data') }, encoding: 'utf8' });
+  const plan = JSON.parse(r.stdout);
+  assert.ok(plan.edits[1].new_string.endsWith('Hand over: the `date +%Y` line and the $HOME check'));
+  assert.equal(plan.hookConnected, false);
+});
+
 test('CLI prints a plan for a skill', () => {
   const t = home();
   t.put(t.h, 'demo-skill', PLAIN);

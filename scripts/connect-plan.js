@@ -10,7 +10,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { isConnected, countRuns, dataDir } = require('./log-run.js');
+const { frontmatter, isConnected, countRuns, dataDir } = require('./log-run.js');
 
 const DEFAULT_RUBRIC = 'references/rubric.md';
 const POINTER = [
@@ -18,7 +18,8 @@ const POINTER = [
   'result — invoke `skill-coach:run-end`. Settings live in the skill-coach data',
   'folder, not here.',
 ];
-const HEADING = /^## Self-improvement\b/i;
+// "## Self-improvement", optionally with a note in brackets — never "… wiring" or "-loop".
+const HEADING = /^##\s+Self-improvement\s*(\([^)]*\))?\s*$/i;
 
 const occurrences = (text, s) => text.split(s).length - 1;
 
@@ -26,19 +27,30 @@ function sectionText(eol, handOver) {
   return ['## Self-improvement', '', ...POINTER, ...(handOver ? ['', handOver] : [])].join(eol);
 }
 
-function findHeading(lines) {
-  let inFence = false;
-  let at = -1;
-  lines.forEach((l, i) => {
-    if (/^(```|~~~)/.test(l)) inFence = !inFence;
-    else if (!inFence && HEADING.test(l)) at = i;
+// For each line, whether it is part of a fenced code block (CommonMark: a fence closes
+// only with the same character, at least as long, and no info string).
+function fenced(lines) {
+  let open = null;
+  return lines.map((l) => {
+    const m = l.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (!open) {
+      if (m) open = { ch: m[1][0], len: m[1].length };
+      return Boolean(m);
+    }
+    if (m && m[1][0] === open.ch && m[1].length >= open.len && !m[2].trim()) open = null;
+    return true;
   });
-  if (at < 0) return null;
+}
+
+function findHeading(lines) {
+  const inFence = fenced(lines);
+  const hits = lines.map((l, i) => i).filter((i) => !inFence[i] && HEADING.test(lines[i]));
+  if (hits.length === 0) return null;
+  if (hits.length > 1) return { error: 'the skill has several Self-improvement sections; connect it by hand' };
+  const at = hits[0];
   let end = lines.length;
-  inFence = false;
   for (let i = at + 1; i < lines.length; i++) {
-    if (/^(```|~~~)/.test(lines[i])) inFence = !inFence;
-    else if (!inFence && /^## /.test(lines[i])) { end = i; break; }
+    if (!inFence[i] && /^#{1,2}\s/.test(lines[i])) { end = i; break; }
   }
   while (end > at + 1 && !lines[end - 1].trim()) end -= 1;
   return { at, end };
@@ -48,10 +60,10 @@ function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '' } = {}) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const body = text.endsWith(eol) ? text.slice(0, -eol.length) : text;
   const lines = body.split(eol);
-  if (!/^﻿?---$/.test(lines[0])) return { error: 'the skill has no frontmatter (it must start with ---)' };
-  const fmEnd = lines.indexOf('---', 1);
-  if (fmEnd < 0) return { error: 'the frontmatter is never closed with ---' };
-  if (lines.slice(1, fmEnd).some((l) => l.startsWith('skill-coach:'))) {
+  const fm = frontmatter(text);
+  if (!fm) return { error: 'the skill has no frontmatter (it must start and end with a --- line)' };
+  const fmEnd = fm.end;
+  if (fm.lines.slice(1, fmEnd).some((l) => l.startsWith('skill-coach:'))) {
     return { state: 'connected', sectionMode: null, existingSection: null, edits: [] };
   }
 
@@ -61,19 +73,20 @@ function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '' } = {}) {
     const old = lines.slice(start, fmEnd + 1).join(eol);
     if (occurrences(text, old) === 1) {
       const kept = lines.slice(start, fmEnd).join(eol);
-      fmEdit = { old_string: old, new_string: [kept, 'skill-coach:', `  rubric: ${rubric}`, '---'].join(eol) };
+      fmEdit = { old_string: old, new_string: [kept, 'skill-coach:', `  rubric: ${rubric}`, lines[fmEnd]].join(eol) };
     }
   }
   if (!fmEdit) return { error: 'no unique place to add the frontmatter block' };
 
-  const section = sectionText(eol, handOver);
+  const section = sectionText(eol, /^Hand over:\s*[—-]?\s*$/.test(handOver) ? '' : handOver);
   const found = findHeading(lines);
+  if (found && found.error) return { error: found.error };
   let sectionEdit = null;
   let existingSection = null;
   if (found) {
     existingSection = lines.slice(found.at, found.end).join(eol);
     if (occurrences(text, existingSection) !== 1) return { error: 'the existing Self-improvement section is not unique' };
-    sectionEdit = { old_string: existingSection, new_string: section };
+    if (existingSection !== section) sectionEdit = { old_string: existingSection, new_string: section };
   } else {
     for (let start = lines.length - 1; start > fmEnd && !sectionEdit; start--) {
       const tail = lines.slice(start).join(eol);
@@ -82,13 +95,15 @@ function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '' } = {}) {
     if (!sectionEdit) return { error: 'no unique place to append the Self-improvement section' };
   }
 
-  // Apply both edits to a copy, in order, to prove each anchor still occurs exactly once.
+  // Apply the edits to a copy, in order, to prove each anchor still occurs exactly once.
+  const edits = sectionEdit ? [fmEdit, sectionEdit] : [fmEdit];
   let check = text;
-  for (const edit of [fmEdit, sectionEdit]) {
+  for (const edit of edits) {
     if (occurrences(check, edit.old_string) !== 1) return { error: 'the planned edits overlap; connect this skill by hand' };
     check = check.replace(edit.old_string, edit.new_string);
   }
-  return { state: 'not-connected', sectionMode: found ? 'replace' : 'append', existingSection, edits: [fmEdit, sectionEdit] };
+  const sectionMode = !found ? 'append' : (sectionEdit ? 'replace' : 'keep');
+  return { state: 'not-connected', sectionMode, existingSection, edits };
 }
 
 function findSkill(name, { home, cwd, root }) {
@@ -138,13 +153,17 @@ function main(argv, env) {
   const where = findSkill(name, { home, cwd, root: opt('--root') });
   if (where.error) return { ok: false, reason: where.error };
   const text = fs.readFileSync(where.file, 'utf8');
-  const plan = planConnect(text, { rubric: opt('--rubric') || DEFAULT_RUBRIC, handOver: opt('--hand-over') || '' });
+  // Prefer --hand-over-file: a shell argument would expand backticks and $ in the line.
+  const handFile = opt('--hand-over-file');
+  const handOver = handFile ? fs.readFileSync(handFile, 'utf8').replace(/\s+$/, '') : (opt('--hand-over') || '');
+  const plan = planConnect(text, { rubric: opt('--rubric') || DEFAULT_RUBRIC, handOver });
   if (plan.error) return { ok: false, reason: plan.error, file: where.file };
   const rel = plan.state === 'connected' ? (rubricOf(text) || DEFAULT_RUBRIC) : (opt('--rubric') || DEFAULT_RUBRIC);
   const rubricPath = path.join(where.dir, rel);
   return {
     ok: true, skill: name, root: where.root, file: where.file, warning: where.warning,
-    state: plan.state, sectionMode: plan.sectionMode, existingSection: plan.existingSection,
+    state: plan.state, hookConnected: isConnected(name, cwd, home),
+    sectionMode: plan.sectionMode, existingSection: plan.existingSection,
     rubric: { path: rubricPath, exists: fs.existsSync(rubricPath) }, edits: plan.edits,
   };
 }
