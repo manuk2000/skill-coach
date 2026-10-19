@@ -41,7 +41,21 @@ Start a new session afterwards; hooks load at session start. The plugin needs No
 ## Connect a skill
 
 A skill is recorded as soon as the plugin is installed, but scored only once you
-connect it. Add two things to its `SKILL.md`:
+connect it. One command does it:
+
+```
+/skill-coach:connect demo-skill
+```
+
+It writes the skill's rules file first (the `skill-coach:rubric-builder` agent drafts
+it; you approve), asks the one logic question, shows the two exact changes to
+`SKILL.md`, applies them on your yes, and confirms. `/skill-coach:undo` reverses it.
+Run `/skill-coach:connect` without a name to list your unconnected skills, most used
+first. Skills that belong to a plugin cannot be connected.
+
+### By hand
+
+Add two things to the skill's `SKILL.md`:
 
 1. In the frontmatter:
 

@@ -66,7 +66,8 @@ format — never change a rubric or the criteria yourself.
 ## 5. Skills that are not connected
 
 From the ledger: skills that ran in the period but have no `skill-coach:` block in
-their frontmatter. Show how many runs each had — they are recorded, never scored.
+their frontmatter. Show how many runs each had — they are recorded, never scored —
+and suggest `/skill-coach:connect <skill>` for the most used ones.
 
 ## 6. Scoring this session (period `session` only)
 

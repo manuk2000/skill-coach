@@ -47,7 +47,11 @@ write or change any file.
      `agents/worker.md`), one line on what it catches, and a deduction.
    - The must-nots, marked as such.
    - The trigger numbers and the budget, if any.
-4. **Return the draft** as your final message, in a fenced `markdown` block, followed
+4. **Suggest a hand-over line**: one line naming the evidence the judge needs from a
+   run of this skill beyond the transcript — a telemetry line, a self-check result,
+   a subagent's call count — starting `Hand over:`. Write `Hand over: —` if nothing.
+5. **Return the draft** as your final message, in a fenced `markdown` block, then the
+   hand-over line, followed
    by one line: *"Save this as `<skill_dir>/references/rubric.md` if it looks right."*
 
 ## Hard rules

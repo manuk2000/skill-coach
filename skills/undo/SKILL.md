@@ -16,8 +16,10 @@ argument-hint: "[change-id]"
 ## Steps
 
 1. Show the entry in two lines: the file and the change's before → after.
-2. **Check before touching anything.** Read the file. It must contain the entry's
-   `after` text exactly once. If it does not — the file changed since, or the text
+2. **Check before touching anything.** An entry may hold numbered pairs
+   (`before 1:`/`after 1:`, `before 2:`/`after 2:` — a `connect` entry holds two);
+   check every pair before reverting any, then revert them last pair first. Read the
+   file. It must contain each `after` text exactly once. If it does not — the file changed since, or the text
    appears more than once — restore nothing. Say so, and name the safety copy (the
    entry's `- backup:` line) so the user can restore by hand.
 3. Edit the file: replace the `after` text with the `before` text. Never write a

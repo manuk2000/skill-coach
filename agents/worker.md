@@ -156,7 +156,7 @@ does not exist yet is created as its title line, a blank line, and the anchor(s)
 **`changes.md` entry**
 
 ```
-## C-YYYYMMDD-NNN · <skill> · <file name> · <text|logic> · <started|done|undone>
+## C-YYYYMMDD-NNN · <skill> · <file name> · <text|logic|connect> · <started|done|undone>
 - date: YYYY-MM-DD
 - file: <absolute path>
 - backup: backups/<change id>/<file name>
@@ -172,6 +172,10 @@ after:
 <exact new text>
 ~~~
 ```
+
+A `connect` entry (written by the connect skill, kind `connect`) holds two numbered
+pairs, `before 1:`/`after 1:` and `before 2:`/`after 2:`, instead of one pair; it has
+no `- key:` line.
 
 **`proposals.md` entry**: the same shape with header
 `## P-YYYYMMDD-NNN · <skill> · <file name> · <text|logic> · <pending|approved|rejected>`,
