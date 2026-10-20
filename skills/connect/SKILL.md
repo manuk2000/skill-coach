@@ -2,8 +2,9 @@
 name: connect
 description: >
   Connect one of the user's own skills to skill-coach in one guided pass: write its
-  rules file (references/rubric.md) with the rubric-builder, asking the user its
-  questions one at a time in plain words, ask the one-time logic question, show the
+  rules file (references/rubric.md) with the rubric-builder, asking the user only
+  what it cannot decide, one question at a time in plain words, ask the one-time
+  logic question, show the
   two exact edits to its SKILL.md, apply them on a yes, log them so
   /skill-coach:undo can reverse the connect, and confirm. Use when the user runs
   /skill-coach:connect, or asks to connect, hook up or wire a skill to skill-coach.
@@ -23,9 +24,12 @@ leaves them in place.
 
 ## How to ask
 
-Every question in this skill — picking the skill, the rubric questions, saving the
-rubric, the logic setting, the final yes — is asked the same way:
+Every question in this skill — picking the skill, the rubric-builder's questions,
+saving the rules, the auto-fix setting, the final yes — is asked the same way:
 
+- **Only real choices.** Ask only what you cannot decide yourself: a preference that
+  only the user has, or a yes before something is written. What the skill's own
+  text, a default or an earlier answer settles is decided and shown, never asked.
 - With the AskUserQuestion tool, **one question per call**. Wait for the answer
   before the next question. Never put two questions in one call or one message.
 - In plain words: one short sentence, no rubric or plugin terms (unit, must-not,
@@ -56,15 +60,15 @@ the user gave one).
 
 The skill's `SKILL.md` must never point at a rules file that does not exist.
 
-- `rubric.exists` is true → keep it. Ask one question for the hand-over line:
-  *"Besides the conversation, what should the scorer look at in a run of
-  `<skill>`?"* Offer the useful lines of the current `## Self-improvement` section
-  (`existingSection`) as the suggested answer, and `Nothing extra` (`Hand over: —`).
+- `rubric.exists` is true → keep it. The useful lines of the current
+  `## Self-improvement` section (`existingSection`) become the hand-over line, as
+  `Hand over: <them>`, or `Hand over: —` when there are none; the preview shows it.
 - `rubric.exists` is false:
   1. Call the subagent `skill-coach:rubric-builder` with `skill_dir` (the folder of
      `file`) and `plugin_root`.
-  2. Say in one line: *"I'll ask you <n> short questions about what a good result of
-     `<skill>` looks like, one at a time. Each has a suggested answer."*
+  2. `## Questions` is `none` → go to 5. Otherwise say in one line: *"I set most of
+     the rules from `<skill>` itself. <n> question(s) only you can answer, one at a
+     time."*
   3. Ask its `## Questions` in order, one per call: the question is `ask` followed by
      `For example: <example>`; the header is the text after `Q<n> · `; the options
      are `suggested` (label + `(Recommended)`, its meaning as the description) and
@@ -72,8 +76,10 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
   4. Every answer was the suggested one → keep the draft. Any other answer → call the
      rubric-builder again with `answers`: each question's `ask` with the user's
      answer in their words. Ask any new question it returns the same way.
-  5. Show the draft, then its `## Problems in the skill` under the heading *"Not part
-     of the rules — problems in the skill itself"* (leave it out when it says none).
+  5. Show its `## Decided for you` first, under the heading *"Decided from your
+     skill — type a change if one is wrong"*; then the draft; then its
+     `## Problems in the skill` under the heading *"Not part of the rules — problems
+     in the skill itself"* (leave it out when it says none).
      Ask *"Save these rules for `<skill>`?"* — `Save them (Recommended)`: writes
      `references/rubric.md`, the skill itself is not changed yet; `Stop here`:
      nothing is written. A typed answer is a change: call the rubric-builder again
@@ -81,9 +87,9 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
   6. Saved → Write the draft to `rubric.path`. Stopped → stop; nothing has been
      changed.
 
-The hand-over line comes from the evidence question: the suggested answer → the
-rubric-builder's `Hand over:` line as it is; `Nothing extra` → `Hand over: —`; a typed
-answer → `Hand over: <the user's words>`.
+The hand-over line is the rubric-builder's `Hand over:` line as it is. Only when it
+asked the evidence question: `Nothing extra` → `Hand over: —`; a typed answer →
+`Hand over: <the user's words>`.
 
 ## 3. The one question
 
