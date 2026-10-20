@@ -35,7 +35,7 @@ write or change any file.
 
    | Topic | What you are finding out |
    |---|---|
-   | unit of work | what one piece of the skill's output is (one request, one file, one item), or none |
+   | unit of work | whether each part of an answer (a table, a ticket, a file) gets its own grade — default yes; see the fixed wording below |
    | wrong answers | what makes a result wrong, not just rough — these become must-nots with heavy weights |
    | waste | the most likely wasted effort — this becomes the efficiency family |
    | when to fix | the trigger numbers; default: a fix when a unit scores below 7 or the run below 8 |
@@ -56,6 +56,20 @@ write or change any file.
    When the open choice is one item of a list ("should this mistake count too?"), put
    the whole list in `suggested` and the open item in an `other`, so the user answers
    one thing.
+
+   The unit-of-work question always uses this wording, with `<part>` replaced by the
+   skill's own word for one piece of its answer (table, ticket, message):
+
+   ~~~
+   ### Q1 · Grading
+   - ask: Should each <part> in an answer get its own grade, or the whole answer one grade?
+   - example: <a typical request> gives <two or more parts>; with a grade each, a bad one shows on its own.
+   - suggested: One grade per <part> — each <part> is graded on its own, so you see which one went wrong
+   - other: One grade for everything — the whole answer gets one grade, however many <parts> it has
+   ~~~
+
+   Leave this question out only when the skill's answer has no parts to count; the
+   whole run then gets one grade.
 3. **Draft** `references/rubric.md` from the suggested answers, or from `answers`
    when given:
    - A **result** family, and an **efficiency** family only when a unit of work
