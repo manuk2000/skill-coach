@@ -2,8 +2,9 @@
 name: connect
 description: >
   Connect one of the user's own skills to skill-coach in one guided pass: write its
-  rules file (references/rubric.md) with the rubric-builder, ask the one-time logic
-  question, show the two exact edits to its SKILL.md, apply them on a yes, log them so
+  rules file (references/rubric.md) with the rubric-builder, asking the user its
+  questions one at a time in plain words, ask the one-time logic question, show the
+  two exact edits to its SKILL.md, apply them on a yes, log them so
   /skill-coach:undo can reverse the connect, and confirm. Use when the user runs
   /skill-coach:connect, or asks to connect, hook up or wire a skill to skill-coach.
   Without a skill name it lists the user's unconnected skills, most used first.
@@ -20,11 +21,27 @@ Nothing in the skill's `SKILL.md` changes until step 5, and only after the user 
 yes. The rubric (step 2) and the config entry (step 3) are written earlier, and undo
 leaves them in place.
 
+## How to ask
+
+Every question in this skill — picking the skill, the rubric questions, saving the
+rubric, the logic setting, the final yes — is asked the same way:
+
+- With the AskUserQuestion tool, **one question per call**. Wait for the answer
+  before the next question. Never put two questions in one call or one message.
+- In plain words: one short sentence, no rubric or plugin terms (unit, must-not,
+  rubric, logic, hook), and an example when it helps.
+- The suggested answer is the first option, its label ending in `(Recommended)`.
+  Every option gets a one-line description of what choosing it does. A header has at
+  most 12 characters.
+- When the tool is not available, ask the same question as plain text, one per
+  message, and stop until the user answers.
+
 ## 0. No skill named
 
 Run `<plan> --list --cwd <the current folder>`. Show the unconnected skills as a short
-table — skill, where it lives, runs recorded — most used first, and ask which one to
-connect. Stop here until the user picks.
+table — skill, where it lives, runs recorded — most used first. Then ask *"Which skill
+should I connect?"* with the four most used as options (the user can type any other
+name). Stop here until the user picks.
 
 ## 1. Find and check
 
@@ -39,22 +56,45 @@ the user gave one).
 
 The skill's `SKILL.md` must never point at a rules file that does not exist.
 
-- `rubric.exists` is true → keep it. Read the skill's current `## Self-improvement`
-  section (`existingSection`, if any) and offer its useful lines as the hand-over
-  line; the user confirms or edits.
-- `rubric.exists` is false → call the subagent `skill-coach:rubric-builder` with
-  `skill_dir` (the folder of `file`) and `plugin_root`. Show the user its draft, its
-  questions with their suggested answers, and its suggested hand-over line. Wait for
-  the user. If they correct something, call the rubric-builder again with their
-  `answers`. When they approve, Write the draft to `rubric.path`. If they stop here,
-  stop — nothing has been changed.
+- `rubric.exists` is true → keep it. Ask one question for the hand-over line:
+  *"Besides the conversation, what should the scorer look at in a run of
+  `<skill>`?"* Offer the useful lines of the current `## Self-improvement` section
+  (`existingSection`) as the suggested answer, and `Nothing extra` (`Hand over: —`).
+- `rubric.exists` is false:
+  1. Call the subagent `skill-coach:rubric-builder` with `skill_dir` (the folder of
+     `file`) and `plugin_root`.
+  2. Say in one line: *"I'll ask you <n> short questions about what a good result of
+     `<skill>` looks like, one at a time. Each has a suggested answer."*
+  3. Ask its `## Questions` in order, one per call: the question is `ask` followed by
+     `For example: <example>`; the header is the text after `Q<n> · `; the options
+     are `suggested` (label + `(Recommended)`, its meaning as the description) and
+     each `other`. Do not show the draft yet.
+  4. Every answer was the suggested one → keep the draft. Any other answer → call the
+     rubric-builder again with `answers`: each question's `ask` with the user's
+     answer in their words. Ask any new question it returns the same way.
+  5. Show the draft, then its `## Problems in the skill` under the heading *"Not part
+     of the rules — problems in the skill itself"* (leave it out when it says none).
+     Ask *"Save these rules for `<skill>`?"* — `Save them (Recommended)`: writes
+     `references/rubric.md`, the skill itself is not changed yet; `Stop here`:
+     nothing is written. A typed answer is a change: call the rubric-builder again
+     with it, show the new draft, and ask again.
+  6. Saved → Write the draft to `rubric.path`. Stopped → stop; nothing has been
+     changed.
+
+The hand-over line comes from the evidence question: the suggested answer → the
+rubric-builder's `Hand over:` line as it is; `Nothing extra` → `Hand over: —`; a typed
+answer → `Hand over: <the user's words>`.
 
 ## 3. The one question
 
-If `<data_dir>/config.json` has no `logic_auto` for this skill, ask: *"Auto-improvement
-of logic is on for `<skill>`. Turn it off?"* — and wait for the answer; an unclear
-answer means `on`. Add the key `"logic_auto": "on" | "off"` to the skill's entry under
-`skills` with the Edit tool, keeping any other keys that entry already has.
+If `<data_dir>/config.json` has no `logic_auto` for this skill, ask: *"Small wording
+fixes are always made by themselves. When a run of `<skill>` goes wrong, may
+skill-coach also change the skill's steps and rules by itself?"* — header `Auto-fix`;
+options `Yes, by itself (Recommended)`: the fix is made and logged,
+`/skill-coach:undo` reverses it → `on`; `No, ask me first`: the fix waits until you
+approve it in `/skill-coach:analyze` → `off`. An unclear answer means `on`. Add the
+key `"logic_auto": "on" | "off"` to the skill's entry under `skills` with the Edit
+tool, keeping any other keys that entry already has.
 Create the file as
 `{"defaults":{"text_auto":"on","logic_auto":"on","score_after_run":"on"},"skills":{}}`
 first if it does not exist.
@@ -67,7 +107,10 @@ then run `<plan>` again with the same `--cwd`/`--root` plus
 argument — backticks and `$` in it would be expanded. Show every edit in `edits`
 exactly as before → after: first the frontmatter, then the `## Self-improvement`
 section. `sectionMode` says whether the section replaces an old one, is added at the
-end, or is `keep` (it already matches, so only the frontmatter changes). Ask one question: *"Connect `<skill>` with these two changes?"*
+end, or is `keep` (it already matches, so only the frontmatter changes). Then ask
+*"Make these <2 or 1> changes to `<skill>`'s SKILL.md?"* — header `Connect`; options
+`Yes, connect it (Recommended)`: applies the changes shown above, `/skill-coach:undo`
+reverses them; `No, stop here`: the skill stays as it is and the saved rules stay.
 No yes → stop.
 
 ## 5. Apply
@@ -93,6 +136,8 @@ Undo with `/skill-coach:undo <change id>`."*
 
 ## Rules
 
+- One question at a time, as in "How to ask" — never a list of questions in one
+  message.
 - Never write a skill file except through the two planned edits.
 - Never connect a plugin's skill; the planner refuses them.
 - Never invent a rubric: either the user approves the rubric-builder's draft, or the

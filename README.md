@@ -47,9 +47,11 @@ connect it. One command does it:
 /skill-coach:connect demo-skill
 ```
 
-It writes the skill's rules file first (the `skill-coach:rubric-builder` agent drafts
-it; you approve), asks the one logic question, shows the two exact changes to
-`SKILL.md`, applies them on your yes, and confirms. `/skill-coach:undo` reverses it.
+It asks you a few short questions, one at a time, each with a suggested answer you can
+take with one click. From your answers the `skill-coach:rubric-builder` agent drafts
+the skill's rules file, and you approve it. Then it asks whether skill-coach may change
+the skill's steps by itself, shows the two exact changes to `SKILL.md`, applies them on
+your yes, and confirms. `/skill-coach:undo` reverses it.
 Run `/skill-coach:connect` without a name to list your unconnected skills, most used
 first. Skills that belong to a plugin cannot be connected.
 
@@ -79,8 +81,8 @@ Add two things to the skill's `SKILL.md`:
 
 Then write `references/rubric.md` — the rules the skill is scored by. The
 `skill-coach:rubric-builder` agent drafts one for you: ask Claude to *"use the
-skill-coach rubric-builder agent for demo-skill"*. It asks a few questions and returns
-a draft; you save it.
+skill-coach rubric-builder agent for demo-skill"*. It returns a few questions, each
+with a suggested answer, and a draft built from them; you save it.
 
 ## Settings
 
