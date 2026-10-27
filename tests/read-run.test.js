@@ -79,10 +79,12 @@ test('typed start is found from <command-name>', () => {
 test('unknown skill returns found false', () => assert.equal(readRun(lines, 'nope').found, false));
 
 test('corrections vs false positives', () => {
-  for (const t of ['no, use X', "don't do that", 'stop', 'I meant the other one', 'I told you before', "that's wrong", 'use A not B']) {
+  for (const t of ['no, use X', "don't do that", 'stop', 'I meant the other one', 'I told you before', "that's wrong", 'use A not B',
+    'Use the Added heading for new features instead of New — follow the earlier releases, not this one.',
+    'please use the short date format rather than the long one']) {
     assert.equal(isLikelyCorrection(t), true, t);
   }
-  for (const t of ['no problem', 'no worries', 'no thanks', "don't worry", 'looks good']) {
+  for (const t of ['no problem', 'no worries', 'no thanks', "don't worry", 'looks good', 'use the defaults', 'use it. Not now though']) {
     assert.equal(isLikelyCorrection(t), false, t);
   }
 });
@@ -136,6 +138,32 @@ test('a question mid-run does not end the run when run-end follows', () => {
   assert.equal(r.final_answer, 'Done: here is the answer.');
   assert.deepEqual(r.user_messages, [{ text: 'the second one', likely_correction: false }]);
   assert.equal(r.end_time, 'c7');
+});
+
+test('an answer printed after a clean run-end call is still the answer', () => {
+  const r = readRun([
+    assistantTool('d0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('d1', 's1', 'loaded'),
+    assistantTool('d2', 'b1', 'Bash', {}), toolResult('d3', 'b1', 'ok'),
+    assistantTool('d4', 'r1', 'Skill', { skill: 'skill-coach:run-end' }), toolResult('d5', 'r1', 'loaded'),
+    assistantText('d6', 'The late answer.'),
+    userLine('d7', 'no, use the other folder'),
+    assistantTool('d8', 'r2', 'Skill', { skill: 'skill-coach:run-end' }),
+  ], 'demo-skill');
+  assert.equal(r.final_answer, 'The late answer.');
+  assert.equal(r.tool_calls, 2);
+  assert.deepEqual(r.user_messages.at(-1), { text: 'no, use the other folder', likely_correction: true });
+  assert.equal(r.end_time, 'd7');
+});
+
+test("skill-coach's own lines after the call are not part of the answer", () => {
+  const r = readRun([
+    assistantTool('e0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('e1', 's1', 'loaded'),
+    assistantTool('e2', 'r1', 'Skill', { skill: 'skill-coach:run-end' }), toolResult('e3', 'r1', 'loaded'),
+    assistantTool('e4', 'j1', 'Agent', { subagent_type: 'skill-coach:judge', description: 'score' }), toolResult('e5', 'j1', '{}'),
+    assistantText('e6', 'The late answer.\n\n🟡 6/10 · Changed SKILL.md → «x» · Undo: /skill-coach:undo\n*Auto-improvement of logic is on for `demo-skill`. Turn it off?*'),
+  ], 'demo-skill');
+  assert.equal(r.final_answer, 'The late answer.');
+  assert.deepEqual(r.subagents, []);
 });
 
 test('CLI prints facts for a readable transcript', () => {

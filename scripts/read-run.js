@@ -18,8 +18,10 @@ const CORRECTIONS = [
   /^stop\b/i,
   /\bi (meant|said|told you)\b/i,
   /\bthat's (wrong|not (right|it|what i))/i,
-  /\buse \S+ (not|instead of) \S+/i,
+  /\buse\b[^.!?\n]{1,120}?\b(not|instead of|rather than)\b/i,
 ];
+// skill-coach's own lines in an answer: the score footer, a setup report, the first-time question.
+const COACH_LINE = /^\s*(?:[🟢🟡🔴]\s*(?:\d|n\/a)|⚠️|n\/a ·|skill-coach: |\*?Auto-improvement of logic is on for)/u;
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n) : s);
@@ -35,6 +37,10 @@ function textOf(content) {
       return '';
     })
     .join('\n');
+}
+
+function withoutCoachLines(text) {
+  return text.split('\n').filter((l) => !COACH_LINE.test(l)).join('\n').trim();
 }
 
 function isLikelyCorrection(text) {
@@ -108,8 +114,16 @@ function readRun(lines, skill) {
     const e = entries[i];
     const content = e.message && e.message.content;
     if (marker >= 0 && i >= marker) {
-      // Past the end-of-run call, keep only the user's next message (a correction).
-      const text = i === marker ? null : genuineUserText(e);
+      // Past the end-of-run call no tool work counts, but an answer printed after the
+      // call is still the answer. The user's next message (a correction) ends the run.
+      if (e.type === 'assistant' && Array.isArray(content)) {
+        for (const item of content) {
+          const text = item && item.type === 'text' && item.text ? withoutCoachLines(item.text) : '';
+          if (text) turnTexts.push(text);
+        }
+        continue;
+      }
+      const text = genuineUserText(e);
       if (text === null) continue;
       facts.user_messages.push({ text: clip(text, 500), likely_correction: isLikelyCorrection(text) });
       end = i;
