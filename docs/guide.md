@@ -10,6 +10,8 @@ with its before and after text, and one command undoes it.
 - [When a run gets scored](#when-a-run-gets-scored)
 - [Read the score line](#read-the-score-line)
 - [What it may change by itself](#what-it-may-change-by-itself)
+- [Skill families](#skill-families)
+- [Choosing a subagent's model](#choosing-a-subagents-model)
 - [Commands](#commands)
 - [Settings](#settings)
 - [Permissions](#permissions)
@@ -26,8 +28,9 @@ your app, and you have connected it to skill-coach.
 2. **The hook** writes one line to a private log: *run 1 of release-notes*. No AI is
    involved, so it costs nothing.
 3. **skill-coach** checks for trouble at the end of the run: an error, a correction,
-   an unusually long run, or a spot check. This run had none, so it stops here and
-   prints nothing. No agents run.
+   an unusually long run, a very large tool result, a request the skill has no step
+   for, or a spot check. This run had none, so it stops here and prints nothing. No
+   agents run.
 4. **You** reply: *"No, group them under Added, Changed and Fixed, like the earlier
    releases."* That is a correction, so the run is now worth scoring.
 5. **The judge (Opus)** reads the run and scores it. Every score starts at 10 and
@@ -89,6 +92,13 @@ Settings).
 - Skills that come from a plugin can't be connected; only your own skills can.
 - It also lists problems it noticed in the skill itself (a dead link, two rules that
   contradict). It reports them and never fixes them.
+- If the skill reads a folder that another skill reads too, the two can form a
+  [family](#skill-families). One folder is shown as already decided; two or more are
+  one extra question, with "No family" as an answer.
+- Run it again on a skill you connected earlier to bring it up to date. It replaces the
+  old pointer sentence with the current one and can add the family line, in one card
+  you confirm. Its rules, its `Hand over:` line and its auto-fix setting stay as they
+  are, and a `## Self-improvement` section you wrote yourself is never rewritten.
 - `/skill-coach:undo <change id>` disconnects the skill again. The id is in the
   confirmation line.
 
@@ -107,8 +117,8 @@ Add this section anywhere in the skill:
 ## Self-improvement
 
 At the end of every run — and again if the user's next message corrects the
-result — invoke `skill-coach:run-end`. Settings live in the skill-coach data
-folder, not here.
+result or asks to add something to the skill — invoke `skill-coach:run-end`.
+Settings live in the skill-coach data folder, not here.
 ```
 
 Under that sentence you can add a line starting `Hand over:` that names extra evidence
@@ -131,12 +141,43 @@ Only when one of these happened. Otherwise the run is just recorded.
 | An error the skill caused | A command it ran failed. Errors from Claude Code itself (a blocked tool, "file not read yet") don't count. |
 | You corrected it | Your next message fixes its answer, or you rejected one of its tool calls. |
 | A long run | More than 20 tool calls. |
+| A large result | One tool result of 40 KB or more came into the run, or into one of its subagents. See the cost check below. |
+| You asked for something new | Part of your request had no step in the skill, so the run improvised it. Or your next message says *"add this to the skill"* or *"do this every time"*. |
 | A spot check | Every 10th run of a skill is scored even when nothing went wrong. |
 | You asked | `/skill-coach:analyze` scores this session's unscored runs. |
 
-A skill is scored at most once per session. If you correct a run that was already
-scored, the new score replaces the old one, and any second fix waits for your
-approval instead of being applied.
+A skill is scored at most once per session, apart from a request after the line (below).
+If you correct a run that was already scored, the new score replaces the old one, and
+any second fix waits for your approval instead of being applied.
+
+**The cost check.** As a run ends, the hook measures the biggest tool result of the run
+and of its subagents. This costs nothing. At 40 KB of text or more (the
+`large_result_kb` setting), the run is scored. Images and documents never count, and a
+result the tool refused as too large does. The judge asks one question: *could the
+skill have fetched less?* It looks for a filter or limit at the source, a count or size
+probe before the full fetch, only the fields that were needed, the bulk handed to a
+subagent, or a copy that was already fetched. Fetching the same large payload twice
+costs more points. A fix changes the method in the skill's own step; it never just
+lowers a number. Nothing is taken off when you asked to see the whole payload. The
+score line shows the cost, see below.
+
+**Requests.** Asking for something new is never marked down. The skill never claimed
+to do it, so the run is scored as usual. What happens next depends on the request:
+
+- **Lasting** when you said so (*"add"*, *"always"*, *"next time"*, *"from now on"*),
+  or when it is one more of the things the skill exists for, such as a new kind of item
+  for a skill that keeps a list of them. It is added to the skill, written from the
+  steps of this run that worked (the query that returned data, the command that
+  exited clean). If the run never managed it, the addition is marked untested and waits
+  for your approval.
+- **One-off** when it was about this case only. It is noted. If the same request
+  comes a second time, it counts as lasting. When unsure, it counts as one-off.
+- **Outside the skill's purpose.** It is never added. The line says so in a few words.
+- **A correction comes first.** If you also corrected the run, the request waits
+  and the correction is fixed. The request is picked up the next time it is seen.
+
+A request you make after the line is scored on its own, as a new row, so it can be
+added even when the run already had a fix.
 
 ## Read the score line
 
@@ -151,12 +192,21 @@ never hidden by nine good ones.
 | 🟡 | 5 – 7.9 | Something went wrong; usually one fix. |
 | 🔴 | 0 – 4.9 | A wrong answer; one fix. |
 
-The line takes one of these shapes:
+Asking for something new never costs points. A skill that hands its work to subagents
+is also checked on whether each one ran on the right model, see
+[Choosing a subagent's model](#choosing-a-subagents-model).
+
+The line takes one of these shapes. After the score it also shows what the run cost,
+as `~85k tokens`: the tokens of the run and of its subagents, cache reads left out.
+The examples leave that figure out, except where it is the point.
 
 | Line | What it means |
 |---|---|
 | `🟡 6/10 · Changed SKILL.md → «…» · Undo: /skill-coach:undo` | A fix was applied. The quote is the start of the new text. |
+| `🟡 6/10 · Changed facts.md + 2 pointers · Undo: /skill-coach:undo` | A fact shared by a [family](#skill-families) was written once, and two copies became pointers. |
 | `🟡 6/10 · 1 fix waiting (P-20261025-001)` | A fix needs your decision; see it in `/skill-coach:analyze`. |
+| `🟡 6/10 · largest 140 KB (fetch_records) · ~85k tokens` | The cost check fired. The biggest tool result was 140 KB, from `fetch_records`, and the run used about 85,000 tokens. Any fix follows, as in the rows above. |
+| `🟢 9/10 · ~12k tokens · Not added (outside the skill): posting the notes to chat` | You asked for something the skill is not meant to do. It was not added. |
 | `🟢 9/10` | Scored, nothing to change. |
 | `⚠️ …` | Something in your setup is broken (a missing permission, a server that is down). It's reported, never "fixed" with a rule. |
 | `n/a · …` | The run never finished a piece of work, so it can't be scored. That is not a failure. |
@@ -171,13 +221,20 @@ as logic.
 |---|---|
 | Text, in the skill's own folder | Applied (setting `text_auto`, on by default) |
 | Logic, in the skill's own folder | Applied, or waits for you if you said "ask me first" (setting `logic_auto`) |
+| A fact the skills of a [family](#skill-families) share | Applied, written once in the family folder (setting `text_auto`) |
+| A rule in a family folder | Always waits for you. It would change every skill of the family at once. |
+| An addition the run never managed to do | Always waits for you, marked untested. |
 | The skill's scoring rules | Always waits for you. The judge never changes the rules it scores by. |
-| Anything outside the skill's folder | Always waits for you: a `CLAUDE.md`, memory, another skill. |
+| Anything outside the skill's folder | Always waits for you: a `CLAUDE.md`, memory, another skill. The family folder and the pointer lines below are the exception. |
 | The plugin's own files | Always waits for you. |
 | A broken setup | Only reported. |
 
-- At most one change per run: the fix for the biggest problem.
-- It never deletes content and never changes a safety or permission rule.
+- At most one change per run: the fix for the biggest problem. A lasting request is the
+  exception that goes first, unless you corrected the run.
+- It never deletes content and never changes a safety or permission rule. There is
+  one exception: when a fact moves to a family folder, each exact copy of it in a
+  skill is replaced by a one-line pointer, `see <file> — <section>`. That moves a fact
+  and changes no rule. Copies inside a code block or a quoted example stay.
 - It edits one section in place. It never appends a "lessons learned" list to the end
   of a skill.
 - A lesson from a single run is written down only when the run proves it: a passing
@@ -187,13 +244,82 @@ Fixes that wait for you are kept in `proposals.md`; approve or reject them in
 `/skill-coach:analyze`. The full scoring rules are in
 [`criteria/general.md`](../criteria/general.md).
 
+## Skill families
+
+Skills that need the same facts (a project name, an id, a path) can share one folder
+for them. Name the folder under `skill-coach:` in each skill's frontmatter:
+
+```yaml
+skill-coach:
+  rubric: references/rubric.md
+  shared: ~/.claude/demo-shared
+```
+
+The connected skills that name the same folder are a family. `/skill-coach:connect`
+adds the line for you when the skill reads a folder that another skill reads too. A
+skill you connected earlier is brought into a family by running connect on it again.
+
+Here is how it works with `release-notes` and a second skill, `demo-skill`. Both say
+*"Records live in the project `ops-records`."* A run of `release-notes` fails because
+that project does not exist; the skill looked and found `team-records`.
+
+1. **The judge** reads the notes of both skills. A problem seen in more than one skill
+   is one family problem, and a fact two skills state belongs in the shared folder.
+2. **The worker** writes *"Records live in the project `team-records`."* once, under a
+   `Records` heading in `~/.claude/demo-shared/facts.md`.
+3. **In each skill**, the sentence is replaced by
+   `see ~/.claude/demo-shared/facts.md — Records`.
+4. **You see** `🟡 6/10 · Changed facts.md + 2 pointers · Undo: /skill-coach:undo`.
+
+Some things to know:
+
+- Notes stay per skill. The judge reads the notes of every member, but each skill keeps
+  its own scores and problems.
+- The fact is applied under the scored skill's `text_auto`; when that is off, the fact
+  and its pointers wait together in `proposals.md`. Otherwise each pointer is applied
+  under its own skill's `text_auto`, and a pointer whose skill has it off waits in
+  `proposals.md` while the rest of the change is applied.
+- A rule in the family folder always waits for you.
+- `/skill-coach:undo` reverts the whole change, every file, or none of them: if a file
+  changed since, it restores nothing and shows you the backup folder.
+- Undo never deletes a file. A file the change created (the first `facts.md`) stays.
+  When it still holds only what the change wrote, you get a line to run yourself:
+  `rm "<path>"`.
+- `/skill-coach:analyze` shows each family next to the per-skill table: which members
+  ran, the family changes applied and undone, and the problems seen in two or more
+  members.
+
+## Choosing a subagent's model
+
+When a skill hands data to a subagent, the model should fit the job. Every scored run
+checks each subagent against this table, a spot check included:
+
+| What the subagent does with the data | Model |
+|---|---|
+| Fetches it, then counts, filters or picks fields. No judgement. | `haiku` |
+| Groups it, compares it, reads a trace or stack and says what matters. | `sonnet` |
+| Decides, interprets, recommends. | No subagent. The main session does it. |
+| The data is small, under about 10 KB. | No subagent. Read it directly. |
+
+A subagent that does not fit costs 2 points: too strong (a stronger model only fetched
+or counted), too weak (the main session had to redo or correct its work), or started
+for data small enough to read directly. When the model that ran is not known, the model
+the skill asked for is used; when neither is known, nothing is taken off. Nothing is
+taken off when you asked to see the whole payload.
+
+A skill whose subagents do different jobs chooses per job. The fix writes the model
+into the skill's own step that starts the subagent, for example *"start it with
+`model: haiku`"*. A skill cannot read the plugin's files while it runs, so the choice
+has to be in its own text. A large result inside a subagent is judged only by this
+check: keeping the bulk out of the main session was right.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/skill-coach:connect [skill] [--root user\|project]` | Connects one skill. Without a name, lists your unconnected skills. `--root` chooses between your user skills and the project's skills. |
-| `/skill-coach:undo [change id]` | Reverts a change; the last one when no id is given. It reverts only that change's text. If the text was edited since, it refuses and shows you the backup instead. |
-| `/skill-coach:analyze [skill] [period]` | What changed since last time, fixes waiting for your approval, how often each skill had trouble, problems that keep coming back, and busy skills that aren't connected yet. Period: `session` (default), `7d`, `30d` or `all`. |
+| `/skill-coach:connect [skill] [--root user\|project]` | Connects one skill, or brings a connected one up to date. Without a name, lists your unconnected skills. `--root` chooses between your user skills and the project's skills. |
+| `/skill-coach:undo [change id]` | Reverts a change; the last one when no id is given. It reverts only that change's text. If the text was edited since, it refuses and shows you the backup instead. It never deletes a file the change created; it gives you the `rm` line. |
+| `/skill-coach:analyze [skill] [period]` | What changed since last time, fixes waiting for your approval, how often each skill and each family had trouble, problems that keep coming back, and busy skills that aren't connected yet. Period: `session` (default), `7d`, `30d` or `all`. |
 
 ## Settings
 
@@ -205,12 +331,13 @@ skills, and any skill can override it.
 | `text_auto` | Wording fixes apply by themselves | `on` |
 | `logic_auto` | Step and rule fixes apply by themselves | `on`, asked once per skill |
 | `score_after_run` | Runs with trouble get scored at the end | `on` |
+| `large_result_kb` | The size in KB of text from which one tool result starts a cost check | `40` |
 
 ```json
 {
-  "defaults": { "text_auto": "on", "logic_auto": "on", "score_after_run": "on" },
+  "defaults": { "text_auto": "on", "logic_auto": "on", "score_after_run": "on", "large_result_kb": 40 },
   "skills": {
-    "release-notes": { "logic_auto": "off" }
+    "release-notes": { "logic_auto": "off", "large_result_kb": 80 }
   }
 }
 ```
@@ -254,9 +381,10 @@ anywhere beyond what Claude reads during your normal session.
 ## Questions
 
 **What does it cost?**
-A clean run costs almost nothing: one log line and a quick check. Only a run with
-trouble starts the judge (Opus) and the worker (Sonnet). Models are chosen by name
-family, so newer versions are used automatically.
+A clean run costs almost nothing: one log line and a quick check. Only a scored run
+(trouble, a very large result, or a request) starts the judge (Opus) and the worker
+(Sonnet), and its line shows what it cost. Models are chosen by name family, so newer
+versions are used automatically.
 
 **Is a skill I didn't connect tracked?**
 Its runs are counted, never scored. `/skill-coach:analyze` shows busy skills that

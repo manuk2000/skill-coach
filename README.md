@@ -35,8 +35,24 @@ A clean run prints nothing and costs almost nothing.
    ```
 
 3. **Use the skill as usual.** When a run has trouble (you correct it, it hits an
-   error, it runs long, or it's every 10th run as a spot check), you get the score
+   error, it runs long, it pulls in a very large tool result, you ask for something the
+   skill has no step for, or it's every 10th run as a spot check), you get the score
    line. `/skill-coach:undo` reverts any change.
+
+## What's new in 0.2
+
+- **Cost checks.** A run that pulled in a very large tool result is scored on whether
+  a narrower fetch would have done, and the score line shows what it cost
+  (`~85k tokens`). See [the cost check](docs/guide.md#when-a-run-gets-scored).
+- **Right model per subagent.** Every scored run checks that each subagent ran on a
+  model that fits its job. See
+  [Choosing a subagent's model](docs/guide.md#choosing-a-subagents-model).
+- **Grow a skill from your requests.** Ask for something the skill has no step for, or
+  say *"add this to the skill"*, and it is added from the steps that worked. Asking is
+  never marked down. See [Requests](docs/guide.md#when-a-run-gets-scored).
+- **Skill families.** Skills that need the same facts keep them once, in one shared
+  folder, and the copies become pointers. See
+  [Skill families](docs/guide.md#skill-families).
 
 ## User guide
 
@@ -47,6 +63,8 @@ The [user guide](docs/guide.md) explains the rest in plain words:
 - [When a run gets scored](docs/guide.md#when-a-run-gets-scored)
 - [Read the score line](docs/guide.md#read-the-score-line)
 - [What it may change by itself](docs/guide.md#what-it-may-change-by-itself)
+- [Skill families](docs/guide.md#skill-families) and
+  [Choosing a subagent's model](docs/guide.md#choosing-a-subagents-model)
 - [Commands](docs/guide.md#commands), [Settings](docs/guide.md#settings),
   [Permissions](docs/guide.md#permissions) and [Your data](docs/guide.md#your-data)
 - [Questions](docs/guide.md#questions)
