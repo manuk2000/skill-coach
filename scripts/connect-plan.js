@@ -4,20 +4,23 @@
 // Read-only planner for /skill-coach:connect. It finds a skill and works out the two
 // exact edits (the frontmatter block and the Self-improvement section) that the chat
 // applies with its Edit tool, so nobody retypes the skill file. Never writes anything.
-//   node connect-plan.js --skill <name> [--cwd <dir>] [--root user|project] [--rubric <path>] [--hand-over <text>]
+//   node connect-plan.js --skill <name> [--cwd <dir>] [--root user|project] [--rubric <path>] [--hand-over <text>] [--shared <folder>]
 //   node connect-plan.js --list [--cwd <dir>]
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { frontmatter, isConnected, countRuns, dataDir } = require('./log-run.js');
+const { sharedOf, folder } = require('./family.js');
 
 const DEFAULT_RUBRIC = 'references/rubric.md';
 const POINTER = [
   "At the end of every run — and again if the user's next message corrects the",
-  'result — invoke `skill-coach:run-end`. Settings live in the skill-coach data',
-  'folder, not here.',
+  'result or asks to add something to the skill — invoke `skill-coach:run-end`.',
+  'Settings live in the skill-coach data folder, not here.',
 ];
+// Every pointer sentence ends with this line; run-end reads the hand-over after it.
+const POINTER_END = 'not here.';
 // "## Self-improvement", optionally with a note in brackets — never "… wiring" or "-loop".
 const HEADING = /^##\s+Self-improvement\s*(\([^)]*\))?\s*$/i;
 
@@ -56,24 +59,104 @@ function findHeading(lines) {
   return { at, end };
 }
 
-function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '' } = {}) {
+// The pointer sentence inside the section: from its first non-blank line through the first
+// line ending POINTER_END. Null when there is no section or no such line (connected by hand).
+function pointerSpan(lines) {
+  const found = findHeading(lines);
+  if (!found || found.error) return null;
+  let from = found.at + 1;
+  while (from < found.end && !lines[from].trim()) from += 1;
+  for (let to = from; to < found.end; to++) {
+    if (lines[to].trimEnd().endsWith(POINTER_END)) return { heading: found.at, from, to };
+  }
+  return null;
+}
+
+// The edit that replaces an out-of-date pointer sentence; null when it is current or not ours to guess.
+function pointerEdit(text, lines, eol) {
+  const span = pointerSpan(lines);
+  if (!span) return null;
+  const old = lines.slice(span.from, span.to + 1);
+  if (old.join(eol) === POINTER.join(eol)) return null;
+  // Anchor on the sentence alone; if the same text is quoted elsewhere, take the heading with it.
+  for (const start of [span.from, span.heading]) {
+    const oldString = lines.slice(start, span.to + 1).join(eol);
+    if (occurrences(text, oldString) === 1) {
+      const lead = lines.slice(start, span.from);
+      return { old_string: oldString, new_string: [...lead, ...POINTER].join(eol) };
+    }
+  }
+  return { error: 'the existing pointer sentence is not unique; update this skill by hand' };
+}
+
+// The edit that adds `  shared: <folder>` as the last line of the skill-coach block.
+function sharedEdit(text, lines, eol, fmEnd, shared) {
+  let at = 1;
+  while (at < fmEnd && !lines[at].startsWith('skill-coach:')) at += 1;
+  if (at >= fmEnd) return { error: 'no skill-coach block in the frontmatter' };
+  if (lines[at].slice('skill-coach:'.length).trim()) {
+    return { error: 'the skill-coach entry in the frontmatter is not a block; add the shared line by hand' };
+  }
+  let last = at;
+  for (let i = at + 1; i < fmEnd; i++) {
+    if (lines[i].trim() && !/^\s/.test(lines[i])) break;
+    if (lines[i].trim()) last = i;
+  }
+  const indent = last > at ? /^\s*/.exec(lines[last])[0] : '  ';
+  for (let start = last; start >= 1; start--) {
+    const old = lines.slice(start, last + 1).join(eol);
+    if (occurrences(text, old) === 1) return { old_string: old, new_string: `${old}${eol}${indent}shared: ${shared}` };
+  }
+  return { error: 'no unique place to add the shared line' };
+}
+
+// Apply the edits to a copy, in order, to prove each anchor still occurs exactly once.
+function overlapping(text, edits) {
+  let check = text;
+  for (const edit of edits) {
+    if (occurrences(check, edit.old_string) !== 1) return true;
+    check = check.replace(edit.old_string, edit.new_string);
+  }
+  return false;
+}
+
+// A connected skill: only the pointer sentence and a missing `shared:` line can change; the
+// rubric line and every line after the pointer (the hand-over) stay exactly as they are.
+function planUpgrade(text, { lines, eol, fmEnd, shared, home }) {
+  const edits = [];
+  if (shared && !sharedOf(text, home)) {
+    const edit = sharedEdit(text, lines, eol, fmEnd, shared);
+    if (edit.error) return edit;
+    edits.push(edit);
+  }
+  const pointer = pointerEdit(text, lines, eol);
+  if (pointer && pointer.error) return pointer;
+  if (pointer) edits.push(pointer);
+  if (overlapping(text, edits)) return { error: 'the planned edits overlap; update this skill by hand' };
+  return { state: edits.length ? 'upgrade' : 'connected', sectionMode: null, existingSection: null, edits };
+}
+
+function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '', shared = '', home = os.homedir() } = {}) {
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const body = text.endsWith(eol) ? text.slice(0, -eol.length) : text;
   const lines = body.split(eol);
   const fm = frontmatter(text);
   if (!fm) return { error: 'the skill has no frontmatter (it must start and end with a --- line)' };
   const fmEnd = fm.end;
+  const family = String(shared || '').trim();
+  if (/[\r\n]/.test(family)) return { error: 'the shared folder must be one line' };
   if (fm.lines.slice(1, fmEnd).some((l) => l.startsWith('skill-coach:'))) {
-    return { state: 'connected', sectionMode: null, existingSection: null, edits: [] };
+    return planUpgrade(text, { lines, eol, fmEnd, shared: family, home });
   }
 
   // Frontmatter: the shortest run of lines ending at the closing --- that occurs once.
+  const block = ['skill-coach:', `  rubric: ${rubric}`, ...(family ? [`  shared: ${family}`] : [])];
   let fmEdit = null;
   for (let start = fmEnd - 1; start >= 1 && !fmEdit; start--) {
     const old = lines.slice(start, fmEnd + 1).join(eol);
     if (occurrences(text, old) === 1) {
       const kept = lines.slice(start, fmEnd).join(eol);
-      fmEdit = { old_string: old, new_string: [kept, 'skill-coach:', `  rubric: ${rubric}`, lines[fmEnd]].join(eol) };
+      fmEdit = { old_string: old, new_string: [kept, ...block, lines[fmEnd]].join(eol) };
     }
   }
   if (!fmEdit) return { error: 'no unique place to add the frontmatter block' };
@@ -95,13 +178,8 @@ function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '' } = {}) {
     if (!sectionEdit) return { error: 'no unique place to append the Self-improvement section' };
   }
 
-  // Apply the edits to a copy, in order, to prove each anchor still occurs exactly once.
   const edits = sectionEdit ? [fmEdit, sectionEdit] : [fmEdit];
-  let check = text;
-  for (const edit of edits) {
-    if (occurrences(check, edit.old_string) !== 1) return { error: 'the planned edits overlap; connect this skill by hand' };
-    check = check.replace(edit.old_string, edit.new_string);
-  }
+  if (overlapping(text, edits)) return { error: 'the planned edits overlap; connect this skill by hand' };
   const sectionMode = !found ? 'append' : (sectionEdit ? 'replace' : 'keep');
   return { state: 'not-connected', sectionMode, existingSection, edits };
 }
@@ -136,6 +214,56 @@ function listSkills({ home, cwd, ledger }) {
   return out.sort((a, b) => (a.connected - b.connected) || (b.runs - a.runs) || a.skill.localeCompare(b.skill));
 }
 
+// Path-like strings that start with ~/ or / — not the tail of a URL, a relative path or $HOME/….
+const PATH_LIKE = /(?<![\w/:.~$}-])(?:~\/|\/)[^\s`'")\]]*/g;
+
+// The folders a SKILL.md names, one spelling each. A path whose last segment has a dot is a file
+// (its folder is the directory above); a trailing slash always means a folder. An absolute path
+// needs two segments, so slash commands such as /clear are not folders.
+function referencedFolders(text, home) {
+  const out = new Set();
+  for (const [raw] of text.matchAll(PATH_LIKE)) {
+    let p = raw.replace(/[.,;:]+$/, '');
+    // A placeholder or glob (<repo>, ${X}, *.md) ends the concrete part: keep the folder before it.
+    const hole = p.search(/[<>{}$*?|]/);
+    if (hole >= 0) p = p.slice(0, p.lastIndexOf('/', hole) + 1);
+    if (p.startsWith('/') && p.split('/').filter(Boolean).length < 2) continue;
+    const isFile = !p.endsWith('/') && p.slice(p.lastIndexOf('/') + 1).includes('.');
+    const dir = folder(isFile ? path.posix.dirname(p) : p, home);
+    if (dir) out.add(dir);
+  }
+  return out;
+}
+
+// Folders this skill's SKILL.md reads that at least one other skill's SKILL.md reads too — the
+// candidates for a shared folder (`shared:`). Read-only. `dir` pins the skill's own folder.
+function sharedCandidates(skill, { home, cwd, env = process.env, dir } = {}) {
+  const homeDir = path.resolve(home);
+  const roots = [...new Set([home, cwd].map((r) => path.resolve(r)))].map((r) => path.join(r, '.claude', 'skills'));
+  const skills = roots.flatMap((base) => {
+    let names = [];
+    try { names = fs.readdirSync(base).sort(); } catch { /* no skills here */ }
+    return names.map((name) => path.join(base, name)).filter((d) => fs.existsSync(path.join(d, 'SKILL.md')));
+  });
+  const own = dir ? path.resolve(dir) : skills.find((d) => path.basename(d) === skill);
+  if (!own) return [];
+  const read = (d) => referencedFolders(fs.readFileSync(path.join(d, 'SKILL.md'), 'utf8'), homeDir);
+
+  const claude = path.join(homeDir, '.claude');
+  const under = (p, base) => p === base || p.startsWith(`${base}/`);
+  const never = [own, ...roots, path.join(claude, 'plugins'), path.join(claude, 'self-improvement'), dataDir({ ...env, HOME: homeDir })];
+  const tooBroad = new Set(['/', homeDir, claude]);
+  const mine = [...read(own)].filter((f) => !tooBroad.has(f) && !never.some((base) => under(f, base)));
+
+  const others = new Set();
+  for (const d of skills.filter((d) => path.resolve(d) !== own)) {
+    try { read(d).forEach((f) => others.add(f)); } catch { /* unreadable skill */ }
+  }
+  return mine.filter((f) => others.has(f))
+    .map((f) => (under(f, homeDir) ? `~${f.slice(homeDir.length)}` : f))
+    .sort();
+}
+
 function rubricOf(text) {
   const m = text.match(/^skill-coach:\r?\n\s+rubric:\s*(.+?)\s*$/m);
   return m ? m[1] : null;
@@ -156,15 +284,17 @@ function main(argv, env) {
   // Prefer --hand-over-file: a shell argument would expand backticks and $ in the line.
   const handFile = opt('--hand-over-file');
   const handOver = handFile ? fs.readFileSync(handFile, 'utf8').replace(/\s+$/, '') : (opt('--hand-over') || '');
-  const plan = planConnect(text, { rubric: opt('--rubric') || DEFAULT_RUBRIC, handOver });
+  const plan = planConnect(text, { rubric: opt('--rubric') || DEFAULT_RUBRIC, handOver, shared: opt('--shared') || '', home });
   if (plan.error) return { ok: false, reason: plan.error, file: where.file };
-  const rel = plan.state === 'connected' ? (rubricOf(text) || DEFAULT_RUBRIC) : (opt('--rubric') || DEFAULT_RUBRIC);
+  const rel = plan.state === 'not-connected' ? (opt('--rubric') || DEFAULT_RUBRIC) : (rubricOf(text) || DEFAULT_RUBRIC);
+  // A skill that already names a shared folder has nothing to be offered.
+  const candidates = sharedOf(text, home) ? [] : sharedCandidates(name, { home, cwd, env, dir: where.dir });
   const rubricPath = path.join(where.dir, rel);
   return {
     ok: true, skill: name, root: where.root, file: where.file, warning: where.warning,
     state: plan.state, hookConnected: isConnected(name, cwd, home),
     sectionMode: plan.sectionMode, existingSection: plan.existingSection,
-    rubric: { path: rubricPath, exists: fs.existsSync(rubricPath) }, edits: plan.edits,
+    rubric: { path: rubricPath, exists: fs.existsSync(rubricPath) }, shared_candidates: candidates, edits: plan.edits,
   };
 }
 
@@ -172,4 +302,4 @@ if (require.main === module) {
   process.stdout.write(JSON.stringify(main(process.argv.slice(2), process.env), null, 2) + '\n');
 }
 
-module.exports = { planConnect, findSkill, listSkills };
+module.exports = { planConnect, findSkill, listSkills, sharedCandidates };

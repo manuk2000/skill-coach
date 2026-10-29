@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { planConnect, findSkill, listSkills } = require('../scripts/connect-plan.js');
+const { planConnect, findSkill, listSkills, sharedCandidates } = require('../scripts/connect-plan.js');
 const { isConnected } = require('../scripts/log-run.js');
+const { sharedOf } = require('../scripts/family.js');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'connect-plan.js');
 const PLAIN = '---\nname: demo-skill\ndescription: Does a demo.\n---\n\n# Demo\n\nStep one.\n\n## Usage\n\nRun it.\n';
@@ -76,7 +77,7 @@ test('a file without frontmatter is refused', () => {
 test('a repeated last line still gives a unique anchor', () => {
   const text = `${PLAIN}\nDone.\n\n## Again\n\nDone.\n`;
   const after = applyAll(text, planConnect(text, {}));
-  assert.ok(after.trimEnd().endsWith('folder, not here.'));
+  assert.ok(after.trimEnd().endsWith('Settings live in the skill-coach data folder, not here.'));
   assert.equal(after.split('Done.').length - 1, 2);
 });
 
@@ -188,4 +189,219 @@ test('CLI prints a plan for a skill', () => {
   assert.equal(plan.state, 'not-connected');
   assert.equal(plan.rubric.exists, false);
   assert.equal(plan.edits.length, 2);
+});
+
+const NEW_POINTER = [
+  "At the end of every run — and again if the user's next message corrects the",
+  'result or asks to add something to the skill — invoke `skill-coach:run-end`.',
+  'Settings live in the skill-coach data folder, not here.',
+].join('\n');
+const OLD_POINTER = [
+  "At the end of every run — and again if the user's next message corrects the",
+  'result — invoke `skill-coach:run-end`. Settings live in the skill-coach data',
+  'folder, not here.',
+].join('\n');
+const HAND_OVER = 'Hand over: the `date +%Y` line and the $HOME check.';
+// A skill connected by v0.1: the old pointer sentence, then a hand-over line, then more skill text.
+const OLD_CONNECTED = PLAIN.replace('---\n\n# Demo', 'skill-coach:\n  rubric: RUBRIC.md\n---\n\n# Demo')
+  + `\n## Self-improvement\n\n${OLD_POINTER}\n\n${HAND_OVER}\n\n## Later\n\nKeep me.\n`;
+
+test('the pointer names corrections and requests', () => {
+  const after = applyAll(PLAIN, planConnect(PLAIN, {}));
+  assert.ok(after.includes(`## Self-improvement\n\n${NEW_POINTER}\n`), 'the section holds the new sentence verbatim');
+  assert.ok(!after.includes('result — invoke'), 'the old wording is gone');
+});
+
+test('an old pointer is upgraded and the hand-over kept', () => {
+  const plan = planConnect(OLD_CONNECTED, {});
+  assert.equal(plan.state, 'upgrade');
+  assert.equal(plan.edits.length, 1);
+  assert.deepEqual(plan.edits[0], { old_string: OLD_POINTER, new_string: NEW_POINTER });
+  const after = applyAll(OLD_CONNECTED, plan);
+  assert.equal(after, OLD_CONNECTED.replace(OLD_POINTER, NEW_POINTER));
+  assert.ok(after.includes(`${NEW_POINTER}\n\n${HAND_OVER}\n\n## Later\n\nKeep me.\n`), 'hand-over and the next section are untouched');
+  assert.match(frontmatterOf(after), /\nskill-coach:\n {2}rubric: RUBRIC\.md$/);
+  assert.equal(planConnect(after, {}).state, 'connected', 'a second pass has nothing to do');
+});
+
+test('an upgrade keeps Windows line endings', () => {
+  const text = OLD_CONNECTED.replace(/\n/g, '\r\n');
+  const plan = planConnect(text, { shared: '~/.claude/demo-shared' });
+  assert.equal(plan.state, 'upgrade');
+  assert.equal(plan.edits.length, 2);
+  const after = applyAll(text, plan);
+  assert.ok(!/[^\r]\n/.test(after), 'every newline stays CRLF');
+  assert.match(after, /\r\n {2}rubric: RUBRIC\.md\r\n {2}shared: ~\/\.claude\/demo-shared\r\n---\r\n/);
+  assert.ok(after.includes(NEW_POINTER.replace(/\n/g, '\r\n')));
+});
+
+test('a connected skill with the current pointer has nothing to do', () => {
+  const fresh = applyAll(PLAIN, planConnect(PLAIN, { handOver: HAND_OVER }));
+  const plan = planConnect(fresh, {});
+  assert.equal(plan.state, 'connected');
+  assert.deepEqual(plan.edits, []);
+});
+
+test('a hand-connected section without the closing line is left alone', () => {
+  const text = PLAIN.replace('---\n\n# Demo', 'skill-coach:\n  rubric: RUBRIC.md\n---\n\n# Demo')
+    + '\n## Self-improvement\n\nInvoke skill-coach:run-end when done.\n';
+  const plan = planConnect(text, {});
+  assert.equal(plan.state, 'connected');
+  assert.deepEqual(plan.edits, []);
+  assert.equal(planConnect(PLAIN.replace('---\n\n# Demo', 'skill-coach:\n  rubric: RUBRIC.md\n---\n\n# Demo'), {}).state, 'connected', 'no section at all is also left alone');
+});
+
+test('an upgrade finds the pointer when the same sentence is quoted elsewhere', () => {
+  const text = `${OLD_CONNECTED}\n\`\`\`markdown\n${OLD_POINTER}\n\`\`\`\n`;
+  const plan = planConnect(text, {});
+  assert.equal(plan.state, 'upgrade');
+  assert.ok(plan.edits[0].old_string.startsWith('## Self-improvement\n\n'), 'anchored on the heading');
+  const after = applyAll(text, plan);
+  assert.ok(after.includes(`## Self-improvement\n\n${NEW_POINTER}\n\n${HAND_OVER}`));
+  assert.ok(after.endsWith(`${OLD_POINTER}\n\`\`\`\n`), 'the quoted copy is untouched');
+});
+
+test('an upgrade with no unique anchor is refused, not guessed', () => {
+  const text = `${OLD_CONNECTED}\n\`\`\`markdown\n## Self-improvement\n\n${OLD_POINTER}\n\`\`\`\n`;
+  assert.match(planConnect(text, {}).error, /not unique/);
+});
+
+test('shared is written under skill-coach', () => {
+  const t = home();
+  const plan = planConnect(PLAIN, { shared: '~/.claude/demo-shared' });
+  assert.equal(plan.state, 'not-connected');
+  const after = applyAll(PLAIN, plan);
+  assert.match(frontmatterOf(after), /\nskill-coach:\n {2}rubric: references\/rubric\.md\n {2}shared: ~\/\.claude\/demo-shared$/);
+  assert.equal(sharedOf(after, t.h), path.join(t.h, '.claude', 'demo-shared'));
+  t.put(t.h, 'demo-skill', after);
+  assert.equal(isConnected('demo-skill', t.project, t.h), true);
+  assert.ok(!applyAll(PLAIN, planConnect(PLAIN, {})).includes('shared:'), 'no shared line unless asked');
+});
+
+test('shared is added to a connected skill as an upgrade', () => {
+  const t = home();
+  const fresh = applyAll(PLAIN, planConnect(PLAIN, { handOver: HAND_OVER }));
+  const plan = planConnect(fresh, { shared: '~/.claude/demo-shared/' });
+  assert.equal(plan.state, 'upgrade');
+  assert.equal(plan.edits.length, 1);
+  const after = applyAll(fresh, plan);
+  assert.match(frontmatterOf(after), /\nskill-coach:\n {2}rubric: references\/rubric\.md\n {2}shared: ~\/\.claude\/demo-shared\/$/);
+  assert.equal(after.replace('  shared: ~/.claude/demo-shared/\n', ''), fresh, 'nothing else changed');
+  assert.equal(sharedOf(after, t.h), path.join(t.h, '.claude', 'demo-shared'));
+  assert.equal(planConnect(after, { shared: '~/.claude/demo-shared' }).state, 'connected', 'never added twice');
+  assert.equal(planConnect(after, { shared: '~/.claude/other-shared' }).state, 'connected', 'an existing family is not replaced');
+});
+
+test('an old pointer and a missing shared line upgrade together', () => {
+  const plan = planConnect(OLD_CONNECTED, { shared: '~/.claude/demo-shared' });
+  assert.equal(plan.state, 'upgrade');
+  assert.equal(plan.edits.length, 2);
+  const after = applyAll(OLD_CONNECTED, plan);
+  assert.match(frontmatterOf(after), /rubric: RUBRIC\.md\n {2}shared: ~\/\.claude\/demo-shared$/);
+  assert.ok(after.includes(`${NEW_POINTER}\n\n${HAND_OVER}\n\n## Later`));
+});
+
+test('a shared line is not added to a one-line skill-coach entry or a multi-line value', () => {
+  const inline = PLAIN.replace('---\n\n# Demo', 'skill-coach: {rubric: x.md}\n---\n\n# Demo');
+  assert.match(planConnect(inline, { shared: '~/.claude/demo-shared' }).error, /by hand/);
+  assert.match(planConnect(PLAIN, { shared: '~/a\nname: x' }).error, /one line/);
+});
+
+// Skills for the shared-candidate tests; `body` is the SKILL.md text after the frontmatter.
+const skillWith = (name, body) => `---\nname: ${name}\ndescription: Does a demo.\n---\n\n# ${name}\n\n${body}\n`;
+
+test('a folder two skills read is a shared candidate', () => {
+  const t = home();
+  t.put(t.h, 'demo-a', skillWith('demo-a', 'Read `~/.claude/demo-shared/notes.md` first, then see ~/.claude/demo-shared/.'));
+  t.put(t.h, 'demo-b', skillWith('demo-b', `Look in "${t.h}/.claude/demo-shared/style.md".`));
+  t.put(t.project, 'demo-c', skillWith('demo-c', 'Nothing shared here.'));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['~/.claude/demo-shared']);
+  assert.deepEqual(sharedCandidates('demo-b', { home: t.h, cwd: t.project }), ['~/.claude/demo-shared']);
+  assert.deepEqual(sharedCandidates('demo-c', { home: t.h, cwd: t.project }), []);
+});
+
+test('a project skill and a user skill can share a folder; results are sorted and unique', () => {
+  const t = home();
+  t.put(t.h, 'demo-a', skillWith('demo-a', 'Uses ~/.claude/zeta-shared/a.md, ~/.claude/zeta-shared/b.md and (~/.claude/alpha-shared).'));
+  t.put(t.project, 'demo-b', skillWith('demo-b', 'Uses [x](~/.claude/alpha-shared/x.md) and ~/.claude/zeta-shared/c.md;'));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['~/.claude/alpha-shared', '~/.claude/zeta-shared']);
+});
+
+test('a folder only one skill reads is not a candidate', () => {
+  const t = home();
+  t.put(t.h, 'demo-a', skillWith('demo-a', 'Read ~/.claude/demo-shared/notes.md and ~/.claude/only-mine/x.md.'));
+  t.put(t.h, 'demo-b', skillWith('demo-b', 'Read ~/.claude/demo-shared/notes.md and ~/.claude/only-theirs/y.md.'));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['~/.claude/demo-shared']);
+  assert.deepEqual(sharedCandidates('lone-skill', { home: t.h, cwd: t.project }), [], 'an unknown skill has none');
+});
+
+test('skills, data and plugin folders are never candidates', () => {
+  const t = home();
+  const data = path.join(t.h, 'elsewhere', 'coach-data');
+  const body = [
+    'See ~/.claude/skills/demo-b/references/x.md and ~/.claude/skills.',
+    'Notes: ~/.claude/self-improvement/ledger.jsonl and ' + data + '/changes.md.',
+    'Plugins: ~/.claude/plugins/cache/p/README.md and ~/.claude/plugins.',
+    'Broad: ~/.claude, ~/, ~/notes.md, / and /readme.md.',
+    `Own: ${t.project}/.claude/skills/demo-a/references/rubric.md.`,
+  ].join('\n');
+  t.put(t.h, 'demo-a', skillWith('demo-a', body));
+  t.put(t.h, 'demo-b', skillWith('demo-b', body));
+  t.put(t.project, 'demo-a', skillWith('demo-a', body));
+  const env = { HOME: t.h, SKILL_COACH_DATA: data };
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project, env }), []);
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project, env: { HOME: t.h } }), [`~/elsewhere/coach-data`], 'only the data folder in use is excluded, beyond the default one');
+});
+
+test('URLs, slash commands and relative paths are not folders', () => {
+  const t = home();
+  const body = 'Run /skill-coach:connect or /clear, see https://example.test/docs/page and ${HOME}/a/b, also refs/rubric.md, ./x/y and a/b/c.';
+  t.put(t.h, 'demo-a', skillWith('demo-a', body));
+  t.put(t.h, 'demo-b', skillWith('demo-b', body));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), []);
+});
+
+test('a placeholder or glob cuts the path back to the folder before it', () => {
+  const t = home();
+  const body = 'Use ~/.claude/demo-shared/<name>.md, ~/.claude/demo-shared/*.md, ~/.claude/demo-glob/{a,b}.md and /srv/<repo>/x.';
+  t.put(t.h, 'demo-a', skillWith('demo-a', body));
+  t.put(t.h, 'demo-b', skillWith('demo-b', 'Use ~/.claude/demo-shared/ and ~/.claude/demo-glob/ here.'));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['~/.claude/demo-glob', '~/.claude/demo-shared']);
+});
+
+test('an absolute folder outside home keeps its absolute form', () => {
+  const t = home();
+  t.put(t.h, 'demo-a', skillWith('demo-a', 'Mount: /srv/demo-shared/notes.md'));
+  t.put(t.h, 'demo-b', skillWith('demo-b', 'Mount: `/srv/demo-shared/`.'));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['/srv/demo-shared']);
+});
+
+test('CLI passes --shared through and lists shared candidates', () => {
+  const t = home();
+  const skillFile = path.join(t.h, '.claude', 'skills', 'demo-skill', 'SKILL.md');
+  const run = (...args) => JSON.parse(spawnSync(process.execPath, [SCRIPT, '--skill', 'demo-skill', '--cwd', t.project, ...args],
+    { env: { ...process.env, HOME: t.h, SKILL_COACH_DATA: path.join(t.h, 'data') }, encoding: 'utf8' }).stdout);
+  t.put(t.h, 'demo-skill', skillWith('demo-skill', 'Reads ~/.claude/demo-shared/notes.md.'));
+  t.put(t.h, 'demo-b', skillWith('demo-b', 'Reads ~/.claude/demo-shared/style.md.'));
+
+  const first = run();
+  assert.deepEqual(first.shared_candidates, ['~/.claude/demo-shared']);
+  assert.ok(!first.edits[0].new_string.includes('shared:'));
+  const second = run('--shared', '~/.claude/demo-shared');
+  assert.match(second.edits[0].new_string, /\n {2}rubric: references\/rubric\.md\n {2}shared: ~\/\.claude\/demo-shared\n---$/);
+  fs.writeFileSync(skillFile, applyAll(fs.readFileSync(skillFile, 'utf8'), second));
+  const third = run('--shared', '~/.claude/demo-shared');
+  assert.equal(third.state, 'connected');
+  assert.deepEqual(third.shared_candidates, [], 'a skill that already has a family is offered none');
+
+  // A skill connected by an older version: new pointer and the family line, in one plan.
+  const old = skillWith('demo-skill', 'Reads ~/.claude/demo-shared/notes.md.')
+    .replace('---\n\n# demo-skill', 'skill-coach:\n  rubric: references/rubric.md\n---\n\n# demo-skill')
+    + `\n## Self-improvement\n\n${OLD_POINTER}\n`;
+  fs.writeFileSync(skillFile, old);
+  const upgrade = run('--shared', '~/.claude/demo-shared');
+  assert.equal(upgrade.state, 'upgrade');
+  assert.equal(upgrade.edits.length, 2);
+  assert.equal(upgrade.rubric.path, path.join(t.h, '.claude', 'skills', 'demo-skill', 'references', 'rubric.md'));
+  assert.deepEqual(upgrade.shared_candidates, ['~/.claude/demo-shared']);
 });

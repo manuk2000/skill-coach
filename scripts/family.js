@@ -99,4 +99,4 @@ function main(argv, env) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2), process.env);
 
-module.exports = { sharedOf, familyOf };
+module.exports = { sharedOf, familyOf, folder };

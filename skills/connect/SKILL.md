@@ -9,6 +9,7 @@ description: >
   /skill-coach:undo can reverse the connect, and confirm. Use when the user runs
   /skill-coach:connect, or asks to connect, hook up or wire a skill to skill-coach.
   Without a skill name it lists the user's unconnected skills, most used first.
+  A skill connected by an older version is brought up to date the same way.
 argument-hint: "[skill] [--root user|project]"
 ---
 
@@ -53,8 +54,30 @@ Run `<plan> --skill <name> --cwd <the current folder>` (add `--root user|project
 the user gave one).
 
 - `ok: false` → say the `reason` in one line and stop.
-- `state: "connected"` → say it is already connected, whether its rubric exists, and stop.
+- `state: "connected"` and `shared_candidates` is empty → say it is already connected and
+  up to date, whether its rubric exists, and stop.
+- `state: "upgrade"`, or `state: "connected"` with `shared_candidates` → it is already
+  connected, but its pointer sentence is out of date or it could join a family. Decide
+  the family below, then follow "Upgrade a connected skill" and not steps 2–4.
+- `state: "not-connected"` → decide the family below, then continue with step 2.
 - `warning` present → say it once (a project skill's change shows in git).
+
+## Family
+
+`shared_candidates` lists folders this skill reads that at least one other skill reads
+too — a skill that has a family keeps one set of notes with the others. Decide it once,
+now, and pass the answer as `--shared '<folder>'` (single quotes, so `~` stays as
+written) on every `<plan>` run from here on.
+
+- **None** → no family; show no line and pass no `--shared`.
+- **Exactly one** → decided, never asked. Show it as one line under *"Decided from your
+  skill"*: *"Family: `<folder>` — other skills read it too"* (in step 2 with the other
+  decided lines, or on its own when the rules already exist). A typed change to it —
+  another folder, or no family — is used as typed.
+- **Two or more** → one question, asked as in "How to ask": *"Which folder do these
+  skills share?"* — header `Family`, one option per folder (the first is
+  `(Recommended)`; each description says the skills that read the folder form one
+  family), and `No family`: nothing is added. A typed folder is used as typed.
 
 ## 2. Rules first
 
@@ -63,6 +86,8 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
 - `rubric.exists` is true → keep it. The useful lines of the current
   `## Self-improvement` section (`existingSection`) become the hand-over line, as
   `Hand over: <them>`, or `Hand over: —` when there are none; the preview shows it.
+  A decided family is shown on its own, under the same *"Decided from your skill"*
+  heading.
 - `rubric.exists` is false:
   1. Call the subagent `skill-coach:rubric-builder` with `skill_dir` (the folder of
      `file`) and `plugin_root`.
@@ -77,7 +102,8 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
      rubric-builder again with `answers`: each question's `ask` with the user's
      answer in their words. Ask any new question it returns the same way.
   5. Show its `## Decided for you` first, under the heading *"Decided from your
-     skill — type a change if one is wrong"*; then the draft; then its
+     skill — type a change if one is wrong"* — with the family line added to it when
+     one is decided; then the draft; then its
      `## Problems in the skill` under the heading *"Not part of the rules — problems
      in the skill itself"* (leave it out when it says none).
      Ask *"Save these rules for `<skill>`?"* — `Save them (Recommended)`: writes
@@ -106,11 +132,11 @@ first if it does not exist.
 ## 4. Preview
 
 Write the agreed hand-over line to `<data_dir>/tmp/hand-over.txt` with the Write tool,
-then run `<plan>` again with the same `--cwd`/`--root` plus
-`--hand-over-file <data_dir>/tmp/hand-over.txt`. Never pass the line as a shell
+then run `<plan>` again with the same `--cwd`/`--root` (and `--shared`, when a family is
+decided) plus `--hand-over-file <data_dir>/tmp/hand-over.txt`. Never pass the line as a shell
 argument — backticks and `$` in it would be expanded. Show every edit in `edits`
-exactly as before → after: first the frontmatter, then the `## Self-improvement`
-section. `sectionMode` says whether the section replaces an old one, is added at the
+exactly as before → after: first the frontmatter (with its `shared:` line when there is
+a family), then the `## Self-improvement` section. `sectionMode` says whether the section replaces an old one, is added at the
 end, or is `keep` (it already matches, so only the frontmatter changes). Then ask
 *"Make these <2 or 1> changes to `<skill>`'s SKILL.md?"* — header `Connect`; options
 `Yes, connect it (Recommended)`: applies the changes shown above, `/skill-coach:undo`
@@ -122,7 +148,7 @@ No yes → stop.
 1. Append one entry to `<data_dir>/changes.md` in the worker's format (see
    `<plugin_root>/agents/worker.md`, Formats), with status `started`, kind `connect`,
    and each edit as a numbered pair (`before 1:`/`after 1:`, `before 2:`/`after 2:` —
-   one pair when `sectionMode` is `keep`). Create the file with its title and anchor
+   one pair when `sectionMode` is `keep`, or when an upgrade has one edit). Create the file with its title and anchor
    first if it does not exist.
 2. Read `file` with the Read tool now — the Edit tool needs it, and it catches a file
    that changed since the preview.
@@ -133,16 +159,36 @@ No yes → stop.
 
 ## 6. Confirm
 
-Run `<plan>` once more with the same `--cwd` and `--root`. Both `state: "connected"`
+Run `<plan>` once more with the same `--cwd` and `--root` (and `--shared`). Both `state: "connected"`
 and `hookConnected: true` are required. If either is missing, say the skill did not
 connect and point to `/skill-coach:undo <change id>`. Otherwise say in one line: *"Connected `<skill>`. Every run is recorded; a run with trouble is scored.
 Undo with `/skill-coach:undo <change id>`."*
+
+## Upgrade a connected skill
+
+The skill's rules, its hand-over line and its auto-fix setting stay as they are; steps 2
+and 3 are skipped.
+
+1. Run `<plan>` again with the same `--cwd`/`--root` plus `--shared '<folder>'` when the
+   family was decided. `state: "connected"` → nothing to change; say so and stop.
+2. `state: "upgrade"` → say in one line what changes, naming only what is true: *"The
+   sentence that tells `<skill>` to call skill-coach now also covers corrections and
+   requests to add something"* and/or *"`<skill>` joins the family `<folder>`"*. Show every
+   edit in `edits` exactly as before → after (the `shared:` line in the frontmatter comes
+   first, then the pointer sentence). Ask *"Make these <1 or 2> changes to `<skill>`'s
+   SKILL.md?"* — header `Upgrade`; options `Yes, update it (Recommended)`: applies the
+   changes shown above, `/skill-coach:undo` reverses them; `No, stop here`: the skill
+   stays as it is. No yes → stop.
+3. Apply and confirm as in steps 5 and 6: one `connect` entry in `changes.md` with one
+   numbered pair per edit, then the same checks. Say *"Updated `<skill>`. Undo with
+   `/skill-coach:undo <change id>`."*
 
 ## Rules
 
 - One question at a time, as in "How to ask" — never a list of questions in one
   message.
-- Never write a skill file except through the two planned edits.
+- Never write a skill file except through the planned edits: two for a connect, one or
+  two for an upgrade.
 - Never connect a plugin's skill; the planner refuses them.
 - Never invent a rubric: either the user approves the rubric-builder's draft, or the
   skill already has one.
