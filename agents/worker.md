@@ -28,15 +28,18 @@ run and you never ask the user anything.
 | `session_id` | the session id |
 | `decision` | the judge's decision JSON (`null` when `approved` is given) |
 | `approved` | optional — a proposal id (`P-…`) the user approved in `analyze` |
+| `family` | optional, with `approved` — the output of `family.js` for the proposal's skill (`{ "shared", "members" }`) |
 | `replaces` | optional — on a correction re-run, the fix id already recorded for this run, or `none` |
 
 Today's date is written `YYYY-MM-DD`; ids use it as `YYYYMMDD`.
 
 ## 1. Recover
 
-Before anything else, look in `<data_dir>/changes.md` for entries of this skill whose
-header ends in `· started` — changes an earlier run began and never finished. Never
-write a backup over a file. For each entry, Read the file:
+Before anything else, look in `<data_dir>/changes.md` for entries whose header ends in
+`· started` — changes an earlier run began and never finished: the entries of this
+skill, and every `family` entry whose `- family:` folder is this skill's family folder
+(`decision.family.shared`, or `family.shared` when `approved` is given), whichever
+member started it. Never write a backup over a file. For each entry, Read the file:
 
 - it contains the entry's `after` text exactly once → Edit `after` back to `before`,
   set the status to `undone`, add `- recovered: <date> (an earlier run stopped half-way)`;
@@ -47,15 +50,17 @@ write a backup over a file. For each entry, Read the file:
 
 An entry with numbered pairs (kind `connect`, written by the connect skill, or kind
 `family`) is recovered as a whole. A `connect` entry's pairs are all in its one
-`- file:`; a `family` entry names each pair's file in its `- file N:` line. A
-`before N: (new file)` pair has landed when its file exists. Check every pair in
+`- file:`; a `family` entry names each pair's file in its `- file N:` line. A pair has
+**landed** when its `after` occurs exactly once in its file and its `before` does not;
+a `before N: (new file)` pair has landed when its file exists. A pair is **untouched**
+when its `before` occurs exactly once and its `after` does not. Check every pair in
 every file first:
 
-- every `after` is in its file → the change fully landed: set the status to `done`
-  and add `- completed: <date> (the change had fully landed)`;
-- every `before` is still there → nothing landed: set `undone` with `- recovered: <date>`;
-- some landed → Edit the landed pairs back, last pair first, and set `undone` with
-  `- recovered: <date>`;
+- every pair landed → the change fully landed: set the status to `done` and add
+  `- completed: <date> (the change had fully landed)`;
+- every pair untouched → nothing landed: set `undone` with `- recovered: <date>`;
+- every pair landed or untouched, some of each → Edit the landed pairs back, last pair
+  first, and set `undone` with `- recovered: <date>`;
 - anything else → leave every file alone and mark it `recovery-skipped` as above.
 
 A created file is never deleted, not even when its pair is reverted: leave it in place
@@ -84,15 +89,24 @@ the value under `defaults`; a missing file or field means `on`. Then follow the
 
 A `family` fix (`decision.family` names the family folder and the members):
 
-- Pair 1 is the family file. `kind` is `logic` → the whole fix goes to step 4: a
-  shared rule changes every member at once. `kind` is `text` → the scored skill's
-  `text_auto`; `off` → the whole fix goes to step 4, since the pointers would point at
-  nothing.
+- Pair 1 is the family file. It must be a `.md` file inside `decision.family.shared`,
+  and no other pair may lie in the family folder; otherwise the whole fix goes to
+  step 4. `kind` is `logic` → the whole fix goes to step 4: a shared rule changes every
+  member at once. `kind` is `text` → the scored skill's `text_auto`; `off` → the whole
+  fix goes to step 4, since the pointers would point at nothing.
 - Every other pair is a pointer edit in a member. Its member is the one whose
-  `skill_dir` holds the pair's file; that member's own `text_auto` decides it: `on` →
-  applied, `off` → proposed.
+  `skill_dir` holds the pair's file. The pair's kind is its `kind` (`text` when it has
+  none), but a pair whose `before` holds a rule word (`must`, `never`, `always`,
+  `only`, `do not`) is `logic` whatever its label. That member's own `text_auto` (a
+  `text` pair) or `logic_auto` (a `logic` pair) decides it: `on` → applied, `off` →
+  proposed. A pair in a member's rules file (`rubric_path` for the scored skill; for
+  another member, the `rubric:` file of its `SKILL.md` frontmatter) is always proposed.
 - A pair whose file lies outside the family folder and outside every member's folder
   → the whole fix goes to step 4.
+- **Unique pointers.** For each file, replace every pair's `before` with its `after`
+  in a copy of its text (change no file): each `after` must then occur exactly once.
+  If one does not → the whole fix goes to step 4; undo and recovery need every `after`
+  exactly once.
 - The applied pairs — pair 1 first — are one `family` change (step 3, "A family
   change"). The proposed pointer pairs together are one proposal entry (step 4, done
   right after step 3).
@@ -118,12 +132,15 @@ A `family` fix (`decision.family` names the family folder and the members):
 **A family change** follows the same steps with these differences:
 
 - The entry has kind `family` and one numbered pair per applied pair, pair 1 being
-  the family file; each pair names its own file (see Formats). A decision pair with
+  the family file when the change has one (an approved proposal of pointer pairs has
+  none); each pair names its own file (see Formats). A decision pair with
   `before: null` creates its file and is written `before N: (new file)`.
+- The entry also has a `- family:` line naming the family folder (see Formats).
 - Before any backup or edit, check **every** pair: each `before` occurs exactly once
-  in its own file, and each `before N: (new file)` file does not exist yet. On any
+  in its own file, each `before N: (new file)` file does not exist yet, and each
+  `after` would occur exactly once in its file once all pairs are applied. On any
   miss, change no file: set the entry to `undone`, add
-  `- failed: pair <N>: <the before text was not found | the file already exists>`,
+  `- failed: pair <N>: <the before text was not found | the file already exists | the after text would not be unique>`,
   and use the "apply failed" footer.
 - Write one safety copy per edited file to
   `<data_dir>/backups/<change id>/<N>-<file name>`, N being the number of its first
@@ -140,8 +157,10 @@ from `proposals.md`:
   file → do not apply it. Set the proposal to `approved`, add
   `- apply-by-hand: <file>`, and use the "approved, apply by hand" footer.
 - It has `- file N:` lines (family pairs, written in step 4) → apply it as a family
-  change with steps 1–6, kind `family`. Set the proposal to `approved` and add
-  `- applied-as: <change id>`.
+  change with steps 1–6, kind `family` — only when `family` is given, its `shared` is
+  the proposal's `- family:` folder, and every file is a `.md` file inside that folder
+  or lies inside a member's `skill_dir`. Otherwise apply by hand, as in the first
+  case. Set the proposal to `approved` and add `- applied-as: <change id>`.
 - Its file lies outside `skill_dir` → apply by hand, as in the first case.
 - Otherwise — including the skill's rubric, which the user has now approved — apply it
   with steps 1–6 using the proposal's file, kind, before and after. Set the proposal
@@ -157,7 +176,8 @@ from `proposals.md`:
    Formats), and set the key's `- status:` in the notes to `proposed` — or leave it
    `fixed` when the rest of a family fix was applied in step 3. A fix with
    `untested: true` gets the line `- untested: yes`. The pairs of a family fix keep
-   their `- file N:` lines and numbered pairs, renumbered from 1.
+   their `- file N:` lines and numbered pairs, renumbered from 1, and the proposal
+   gets a `- family:` line; its kind is `logic` when any of its pairs is logic.
 
 ## 5. Notes
 
@@ -168,12 +188,20 @@ does not exist. For every problem in `decision.problems`:
   `old_string` starts at its `### <key>` line so it is unique — to add 1 to
   `- count:`, set `- last-seen:` to today, and add one line
   `- seen <date> <first 8 characters of session_id>: <evidence, at most 200 characters>`.
-  On a correction re-run (`replaces` is given), a key that already has a `- seen`
-  line with this session's 8 characters is not counted again.
+  On a re-scoring in the same session — a correction re-run (`replaces` is given) or
+  a request (`decision.reason` is `request`) — a key that already has a `- seen` line
+  with this session's 8 characters is not counted again.
 - **New key**: append a new entry before `<!-- skill-coach:problems-end -->` with
   count 1, first-seen and last-seen today, `- last-fixed-by: none`, `- status: open`,
   the suggested action (the fix's `why` when this is the fix's key, otherwise `—`),
   and its first `- seen` line.
+
+`decision.ignore_tool` is set → in `<data_dir>/config.json`, add that tool name to the
+`large_result_ignore` list of the skill's entry under `skills` (create the list, or the
+entry, and keep its other keys; never list a name twice). Create the file as
+`{"defaults":{"text_auto":"on","logic_auto":"on","score_after_run":"on"},"skills":{}}`
+first if it does not exist. The hook reads this list: that tool's results no longer
+start a cost check for the skill.
 
 ## 6. Score row
 
@@ -204,14 +232,17 @@ Your final message is exactly one line:
 
 Then, on the same line:
 
-- **Cost.** When `decision.cost` is not `null`, put
-  ` · largest <largest_kb> KB (<largest_tool>) · ~<tokens_k>k tokens` right after
-  `<band> <result>/10`, before the rest of the line. Leave out the
-  ` · largest …` part when `largest_kb` is `null`. When `cost` is `null`, add nothing.
+- **Cost.** When `decision.cost` is not `null` and the line starts with
+  `<band> <result>/10`, put ` · largest <largest_kb> KB (<largest_tool>) · ~<tokens_k>k tokens`
+  right after `<band> <result>/10`, before the rest of the line. Leave out
+  ` (<largest_tool>)` when `largest_tool` is `null` or empty, and the whole
+  ` · largest …` part when `largest_kb` is `null`. A `⚠️`, `n/a ·` or `✓` line never
+  gets the cost, and neither does any line when `cost` is `null`.
   Example: `🟡 6/10 · largest 140 KB (fetch_records) · ~85k tokens · Changed SKILL.md → «…» · Undo: /skill-coach:undo`.
 - `<k>` is the number of applied pointer pairs: `+ 1 pointer` when it is one, and no
   `+ …` part when it is none.
 - `decision.out_of_scope` is set → add ` · Not added (outside the skill): <out_of_scope>`.
+- `decision.ignore_tool` is set → add ` · <ignore_tool> no longer starts a cost check`.
 - A recovery was skipped in step 1 → add
   ` · Recovery skipped for <C-id>: the file changed since`.
 - A created file was left in place by a recovery or a failed apply → add
@@ -252,12 +283,16 @@ pairs, `before 1:`/`after 1:` and `before 2:`/`after 2:`, instead of one pair; i
 no `- key:` line.
 
 A `family` entry spans several files, so each numbered pair names its own file in a
-`- file N:` line. Pair 1 is the family file; `<file name>` in the header is its name.
-`before N: (new file)` marks a file the change created; it has no `before` block.
+`- file N:` line, and a `- family:` line names the family folder. Pair 1 is the family
+file — the one pair whose file lies in that folder — and `<file name>` in the header is
+its name. A change of pointer pairs only (an approved proposal of them) has no family
+file; its header names its first pair's file. `before N: (new file)` marks a file the
+change created; it has no `before` block.
 
 ```
 ## C-YYYYMMDD-NNN · <skill> · <family file name> · family · <started|done|undone>
 - date: YYYY-MM-DD
+- family: <absolute path of the family folder>
 - file 1: <absolute path of the family file>
 - file 2: <absolute path of a member's file>
 - backup: backups/<change id>/
@@ -285,8 +320,8 @@ Its `- backup:` line names a folder: one safety copy per edited file,
 `## P-YYYYMMDD-NNN · <skill> · <file name> · <text|logic> · <pending|approved|rejected>`,
 the same lines (no `backup:`), an `- evidence:` line, `- untested: yes` when the
 judge marked the fix untested, and `- reason: <the user's words>` once it is decided.
-A proposal of family pairs keeps the `- file N:` lines and numbered pairs;
-`<file name>` is its first pair's file name.
+A proposal of family pairs keeps the `- family:` line, the `- file N:` lines and the
+numbered pairs; `<file name>` is its first pair's file name.
 
 **Notes file** `notes/<skill>.md`
 
@@ -336,9 +371,10 @@ hyphens.
 - Never delete content. The one exception is a pointer pair, which replaces an exact
   copy of a fact that now lives in the family folder. Never delete a file, not even
   one a change created.
-- Write only in `data_dir`, `skill_dir`, the family folder, and — for pointer pairs
-  only — the other members' folders. Never edit `settings.json`, any `CLAUDE.md`,
-  memory, any file under `plugin_root`, or any file whose name contains `.generated.`.
+- Write only in `data_dir`, `skill_dir`, `.md` files in the family folder, and — for
+  pointer pairs only — the other members' folders. Never edit `settings.json`, any
+  `CLAUDE.md`, memory, any file under `plugin_root`, or any file whose name contains
+  `.generated.`.
 - At most one change; a family change is one change, even across files. Never
   re-judge the run or change the decision.
 - Never write a secret value.

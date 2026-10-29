@@ -71,12 +71,22 @@ Judged for every skill, in addition to its own rubric.
   found, total unknown" is honest, "34 found" is not.
 - The limit for `general.oversized-result` is `large_result_kb` in the data folder's
   `config.json` (the skill's own entry, else the defaults; 40 when missing), in KB of
-  text. Images and documents never count. A result refused as "exceeds maximum
-  allowed tokens" counts as oversized.
+  text. Images and documents never count, and neither do the results of `Skill` and
+  `ToolSearch` (loading a skill or a tool's schema). A result over the tool's size
+  limit ("exceeds maximum allowed tokens" — flagged as an error or not, often saved to
+  a file) counts as oversized, at the size its text names.
 - `general.oversized-result` and `general.model-mismatch`: no deduction when the user
   asked to see the full payload. A valid fix changes the method, as for
   `general.effort-mismatch`: the narrower fetch, or the right model named in the
   skill's own step.
+- A size fix is written from what this run did. When the run never ran the narrower
+  fetch successfully (the filter, limit, probe or projection the fix writes in), the
+  fix is marked `untested` and goes to `proposals.md`. A fix that only names a
+  subagent's model has no such test and routes as usual.
+- A large result that no narrower fetch could avoid — a tool's own documentation, or
+  a payload the user asked to see — is not deducted, and the tool is added to the
+  skill's `large_result_ignore` in `config.json`: its results no longer start a cost
+  check for that skill. The user can remove it there.
 - A large result inside a subagent is judged only by `general.model-mismatch`.
   Keeping the bulk out of the run's context was right; the only question is whether
   the model fit the job.
@@ -128,7 +138,7 @@ score against the tier ceiling and also fire `general.no-budget-declared`.
 | fetch it, then count, filter or pick fields — no judgement | `haiku` |
 | group it, compare it, read a trace or stack and say what matters | `sonnet` |
 | decide, interpret, recommend | no subagent — the main session |
-| the data is small (under ~10 KB) | no subagent — read it directly |
+| the data is small (under ~10 KB of results in all) | no subagent — read it directly |
 
 A skill whose subagent jobs differ (one counts, another groups) chooses per job, not
 one model for all. A fix writes that choice into the skill's own step that starts the
@@ -181,9 +191,12 @@ the footer ("add this to the skill", "do this every time").
 - **Lasting or one-off.** Lasting when the user said so ("add", "always", "next
   time", "from now on"), or when the request is a new instance of what the skill
   exists to do (a new kind of item for a skill that keeps a list of them). One-off
-  when it is about this case's data only. **When unsure, it is one-off**: it is
-  recorded in the notes as a `gap` problem, and the second time the same key is seen
-  it counts as lasting.
+  when it is about this case's data only ("this time", "only for this one"). **When
+  unsure, it is one-off**: it is recorded in the notes as a `gap` problem, and the
+  second time the same key is seen it counts as lasting. The test applies to every
+  request, whatever started the scoring: a message after the footer that asks to add
+  something to the skill is lasting by the user's own words; a request found only in
+  the prompt that started the run is judged by this test like any other.
 - **Out of scope.** A request outside the skill's declared purpose is never added. It
   is recorded, and the footer says so in a few words.
 - **Built from what worked.** The addition is written from the run's own steps that
@@ -209,15 +222,19 @@ Every fix is labelled one of two kinds.
   different query, a threshold, a scoring criterion.
 - When unsure, it is **logic**.
 - A change that adds, removes or alters a rule word (`must`, `never`, `always`,
-  `only`, `do not`) or a number is always **logic** — except a pointer edit, below.
+  `only`, `do not`) or a number is always **logic** — except a pointer edit that
+  replaces a fact, below.
 - A change inside a code block or a verbatim quote is always **logic**. Quoted
   examples are evidence; text fixes never rewrite them.
-- **A pointer edit is text**, even when the replaced line holds a number. When a fact
-  moves to the family folder, each exact copy of it in a member — the sentence or
-  table row stating the same value — is replaced by `see <shared file> — <section>`
-  (in a table row, only the cell that holds the value). It moves a fact; it changes
-  no rule. Copies inside a code block or a quoted example are not pointer edits: they
-  stay as they are.
+- **A pointer edit.** When a fact moves to the family folder, each exact copy of it
+  in a member — the sentence or table row stating the same value — is replaced by
+  `see <shared file> — <section>` (in a table row, only the cell that holds the
+  value). The pointer is unique in its file: when the same text would occur twice,
+  it keeps the copy's lead words (`Records project: see …`). A pointer edit is
+  **text** only when the copy it replaces states a fact — a name, id, URL, label,
+  path or number — and holds no rule word. A copy that holds a rule word is **logic**:
+  replacing it would drop the rule with the fact. Copies inside a code block or a
+  quoted example are not pointer edits: they stay as they are.
 
 ## Where a fix goes
 
@@ -226,7 +243,8 @@ The skill's settings (`text_auto`, `logic_auto`) come from the data folder's
 
 A skill whose `skill-coach:` frontmatter block has a `shared: <folder>` line belongs
 to a family: the connected skills that name the same folder. That folder is the
-family folder; it holds facts the members share.
+family folder; it holds facts the members share, in `.md` files. No other kind of
+file in it is ever changed automatically.
 
 | The fix is… | Goes to |
 |---|---|
@@ -234,12 +252,12 @@ family folder; it holds facts the members share.
 | text, `text_auto` off | `proposals.md` |
 | logic, inside the skill's own folder, `logic_auto` on | applied |
 | logic, `logic_auto` off | `proposals.md` |
-| a fact in the family folder | applied under the scored skill's `text_auto`; off → `proposals.md`, together with its pointer edits |
-| a rule (logic) in the family folder | `proposals.md`, always — it changes every member at once |
-| a pointer edit in a member of the same family | applied under that member's own `text_auto`; off → that edit goes to `proposals.md` and the rest of the change applies |
+| a fact in a `.md` file of the family folder | applied under the scored skill's `text_auto`; off → `proposals.md`, together with its pointer edits |
+| a rule (logic), or any file that is not `.md`, in the family folder | `proposals.md`, always — it changes every member at once |
+| a pointer edit in a member of the same family | applied under that member's own `text_auto` (its `logic_auto` when the pointer is logic); off → that edit goes to `proposals.md` and the rest of the change applies |
 | a generated file (`.generated.` in its name) | never edited — a script rewrites it; the fact goes into the hand-written file next to it |
-| an addition the run never managed (`untested`) | `proposals.md`, always, marked untested |
-| the skill's own `references/rubric.md` | `proposals.md`, always — the judge never changes the rules it scores by |
+| an addition, or a narrower fetch, the run never managed (`untested`) | `proposals.md`, always, marked untested |
+| the skill's own `references/rubric.md`, or a member's | `proposals.md`, always — the judge never changes the rules it scores by |
 | outside the skill's own folder (a `CLAUDE.md`, memory, another skill) | `proposals.md`, always — except the family folder and pointer edits inside the same family, above |
 | a plugin file (this file, an agent) | `proposals.md`, always — changed in the plugin repo and released |
 | a broken setup (missing permission, host down, bad credential) | reported only, no fix |

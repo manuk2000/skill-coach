@@ -45,15 +45,17 @@ The caller passes these fields:
    - `rejections` — tool calls the user rejected, with the user's words.
    - `results` — the tool results that came into the run's own context: `count`,
      `total_kb`, `largest` (the top 3, each `tool` and `kb`) and `oversize_errors`
-     (results refused as over the tool's size limit). KB is text only; images and
-     documents never count.
+     (results over the tool's size limit, flagged as an error or not; one saved to a
+     file is in `largest` at the size its text names). KB is text only; images and
+     documents never count, nor do the results of `Skill` and `ToolSearch`.
    - `tokens` — `input`, `cache_creation`, `cache_read` and `output` of the run's own
      context.
    - `subagents` — the subagents the run started, each with `type`, `description`,
      `model_requested` (the model the run's call asked for, `null` when it named
      none), `model_used` (the model that ran), `async`, `tokens`, `largest_kb` and
-     `largest_tool` (its own largest result), and `returned_kb` (what it handed back;
-     `null` for a background subagent).
+     `largest_tool` (its own largest result), `total_kb` (all its tool results added
+     up; `null` when its transcript was not found), and `returned_kb` (what it handed
+     back; `null` for a background subagent).
    - `started_by` — the user message that started the run, or the typed command, up
      to 500 characters.
    - `user_messages` — what the user said, each flagged `likely_correction`.
@@ -82,6 +84,9 @@ The caller passes these fields:
   its `- key:` line; a `family` change counts for every member).
 - `<data_dir>/proposals.md` — if a `pending` proposal for the same key is younger
   than 30 days, do not propose it again; count it as held back.
+- `<data_dir>/config.json`, if it exists — the skill's `large_result_ignore` (its own
+  entry under `skills`, else `defaults`): a tool on that list is never judged by
+  `general.oversized-result`.
 
 ## Score
 
@@ -102,19 +107,29 @@ before deducting ("no problem" is not a correction).
   run's own context — ask whether a narrower fetch would have done. The same tool
   with about the same size twice in `largest` is the same payload fetched twice
   (−3); check the transcript when unsure. A `cost_note` says a check is due; it is a
-  trigger, not evidence — confirm it in the facts.
+  trigger, not evidence — confirm it in the facts. When no narrower fetch could have
+  avoided the result that started the check — a tool's own documentation, or a
+  payload the user asked to see — deduct nothing and name that tool in `ignore_tool`,
+  so its results stop starting cost checks for this skill.
 - **Model.** `general.model-mismatch` reads each entry of `subagents`: compare its job
   (its `description`, and what the run did with what it returned) with "Choosing a
   subagent's model". The model that ran is `model_used`, a full model id whose family
   (`haiku`, `sonnet`, `opus`) is what counts; when it is `null`, use
   `model_requested`; when both are `null`, do not deduct. `model_requested: null`
-  means the skill's step named no model. A subagent whose `largest_kb` is under 10
-  was started for data small enough to read directly. A subagent's large result is
-  judged by this criterion only.
+  means the skill's step named no model. A subagent whose `total_kb` is under 10
+  was started for data small enough to read directly; one that read many small
+  results is not (a large `total_kb` with a small `largest_kb`). When `total_kb` is
+  `null`, do not deduct for size. A subagent's large result is judged by this
+  criterion only.
 - **Requests.** Follow "Requests" in the criteria. What the user asked is in
   `started_by` and `user_messages`; compare it with the steps in the skill's
-  `SKILL.md`. `reason: request` means a message after the footer asked to add
-  something — that request is lasting. A one-off request is recorded in `problems`
+  `SKILL.md`. Apply the lasting-or-one-off test to every request, whatever `reason`
+  says: `reason: request` only means run-end saw one, in the prompt that started the
+  run or in a later message. A message in `user_messages` after the footer that asks
+  to add something to the skill ("add this to the skill", "do this every time") is
+  lasting by the user's own words. A request found only in `started_by` is lasting
+  or one-off by the criteria — "this time", or this case's data only, is one-off, and
+  so is any request you are unsure about. A one-off request is recorded in `problems`
   as a `gap` with `deduction: 0` and no fix; a `gap` key already in the notes (of
   the skill or of any member) counts as lasting. A request outside the skill's
   purpose is never a fix: record it in `problems` (a `gap`, `deduction: 0`) and name
@@ -140,12 +155,16 @@ before deducting ("no problem" is not a correction).
   by each skill's settings.
 - A request fix is `logic`, problem type `gap`. Write the addition from the run's
   steps that succeeded and quote them in `why` — the query that returned data, the
-  command that exited clean. If the run never managed it, set `"untested": true`;
-  every other fix has `"untested": false`.
+  command that exited clean. If the run never managed it, set `"untested": true`.
+  Only a request fix and a size fix (below) can be untested; every other fix has
+  `"untested": false`.
 - `general.oversized-result` and `general.model-mismatch` are breaches of a general
   criterion (type `error`), not learnings. Their fix changes the skill's own step that
   fetched or delegated: the narrower fetch, or the model named per job (for example
-  "start it with `model: haiku`").
+  "start it with `model: haiku`"). A fix that only names a subagent's model has
+  `"untested": false`. A size fix is written from the call in this run that fetched
+  less and returned the data — quote it in `why`; when the run never ran the narrower
+  fetch successfully, set `"untested": true`.
 - Never pick a file whose name contains `.generated.` — a script rewrites it. Put
   the fact into the hand-written file next to it.
 
@@ -156,19 +175,26 @@ more than one member, or the fix for a family problem — it goes to the family
 folder. Set `"scope": "family"` and give `pairs` in place of `file`, `before` and
 `after`:
 
-1. The first pair is the family file: a hand-written file in the family folder whose
-   topic fits (`before` unique in it, `after` its replacement), or a new file there
-   (`before: null`, `after` its whole content).
+1. The first pair is the family file: a hand-written `.md` file in the family folder
+   whose topic fits (`before` unique in it, `after` its replacement), or a new `.md`
+   file there (`before: null`, `after` its whole content). It is the only pair in the
+   family folder.
 2. Then one pointer pair per exact copy of the fact in a member's files (its
    `SKILL.md` or `references/`): `before` is the sentence that states it, `after` is
    `see <shared file> — <section>`. In a table row, only the cell that holds the
-   value changes. Copies inside a code block or a quoted example stay.
+   value changes. Copies inside a code block or a quoted example stay. Each pointer
+   pair has its own `kind`: `text` when `before` states the fact and holds no rule
+   word (`must`, `never`, `always`, `only`, `do not`), otherwise `logic` — the rule
+   would go with the fact.
 
 Check every pair: each `before` appears exactly once in its own file; a file whose
-`before` is `null` does not exist yet. A fact is `text`, pointer edits included. A
-shared rule is `logic` and still a valid decision — the worker routes it to
-`proposals.md`. Every other fix has `"scope": "skill"` and uses `file`, `before`,
-`after`.
+`before` is `null` does not exist yet; each `after` must occur exactly once in its
+file once all pairs are applied — when `see <shared file> — <section>` is already in
+the file, or two pairs of one file would give the same text, keep the copy's lead
+words before it (`Records project: see … — Records`). `fix.kind` is the kind of the
+family file's pair: a fact is `text`; a shared rule is `logic` and still a valid
+decision — the worker routes it to `proposals.md`. Every other fix has
+`"scope": "skill"` and uses `file`, `before`, `after`.
 
 ### Solved-struggle rule
 
@@ -185,7 +211,8 @@ when this run shows all three:
 If any of the three is missing, record the problem in `problems` and return
 `fix: null`. A repeat (the key is already in the notes) and an explicit user
 correction do not need this proof. Neither do a request fix — `untested` marks one
-the run never managed — nor a size or model fix, which breaches a general criterion.
+the run never managed — nor a size or model fix, which breaches a general criterion
+(a size fix whose narrower fetch never ran is `untested` too).
 
 ### Keys
 
@@ -224,6 +251,7 @@ End your final message with exactly one fenced `json` block:
   "cost": { "largest_kb": null, "largest_tool": null, "where": null, "tokens_k": 42 },
   "family": null,
   "out_of_scope": null,
+  "ignore_tool": null,
   "report": null
 }
 ```
@@ -233,9 +261,11 @@ End your final message with exactly one fenced `json` block:
 - `band` is the band of `result`.
 - `type` is `error` · `learning` · `gap`.
 - `fix` is `null` when nothing qualifies. `scope` is `skill` or `family`; a `family`
-  fix has `pairs` (see "Family fix") instead of `file`, `before` and `after`.
+  fix has `pairs` (see "Family fix") instead of `file`, `before` and `after`; each
+  pointer pair also has `kind`.
 - `dead_end` is required for a single-run learning fix, otherwise `null`.
-- `untested` is `true` only for a request the run never managed.
+- `untested` is `true` only for a request the run never managed, or a size fix whose
+  narrower fetch the run never ran successfully.
 - `cost` copies numbers from the facts block; none is estimated:
   - `tokens_k` = (`input` + `cache_creation` + `output` of the run's `tokens`, plus the
     same three of every subagent whose `tokens` is known) / 1000, rounded. Cache reads
@@ -244,12 +274,14 @@ End your final message with exactly one fenced `json` block:
     `largest_kb` and `largest_tool` from `results.largest[0]`; `subagent` → from the
     subagent with the biggest `largest_kb`; KB rounded to a whole number. A note about
     a result over the size limit names no size: `largest_kb` and `largest_tool` stay
-    `null`.
+    `null`. A tool name the facts leave empty is `null`, never `""`.
   - Without a `cost_note`: `largest_kb`, `largest_tool` and `where` are `null`.
   - `cost` is `null` when the run was not found or all its token counts are 0.
 - `family` is the output of `family.js` when `shared` is not `null`, otherwise `null`.
 - `out_of_scope` is a few words naming a request that was not added because it lies
   outside the skill's purpose, otherwise `null`.
+- `ignore_tool` is the name of the tool whose large result no narrower fetch could
+  have avoided (see **Size**), otherwise `null`. Only on a run with a `cost_note`.
 - `report` is a one-line description of a broken setup, otherwise `null`.
 
 A filled example — a family fix. The run used a project name that both members
@@ -273,8 +305,8 @@ state, the name was wrong, and the key was already in the other member's notes:
     "section": "Records",
     "pairs": [
       { "file": "/home/demo/.claude/demo-shared/facts.md", "before": null, "after": "# Shared facts\n\n## Records\n\nRecords live in the project `team-records`.\n" },
-      { "file": "/home/demo/.claude/skills/release-notes/SKILL.md", "before": "Records live in the project `ops-records`.", "after": "see /home/demo/.claude/demo-shared/facts.md — Records" },
-      { "file": "/home/demo/.claude/skills/demo-skill/SKILL.md", "before": "Records live in the project `ops-records`.", "after": "see /home/demo/.claude/demo-shared/facts.md — Records" }
+      { "file": "/home/demo/.claude/skills/release-notes/SKILL.md", "before": "Records live in the project `ops-records`.", "after": "see /home/demo/.claude/demo-shared/facts.md — Records", "kind": "text" },
+      { "file": "/home/demo/.claude/skills/demo-skill/SKILL.md", "before": "Records live in the project `ops-records`.", "after": "see /home/demo/.claude/demo-shared/facts.md — Records", "kind": "text" }
     ],
     "why": "both members state the old project name; fetch_records found team-records",
     "key": "config.stale-project-name",
@@ -291,6 +323,7 @@ state, the name was wrong, and the key was already in the other member's notes:
     ]
   },
   "out_of_scope": null,
+  "ignore_tool": null,
   "report": null
 }
 ```
