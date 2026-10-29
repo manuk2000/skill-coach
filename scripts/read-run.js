@@ -23,6 +23,8 @@ const CORRECTIONS = [
 // skill-coach's own lines in an answer: the score footer, a setup report, the first-time question.
 const COACH_LINE = /^\s*(?:[🟢🟡🔴]\s*(?:\d|n\/a)|⚠️|n\/a ·|skill-coach: |\*?Auto-improvement of logic is on for)/u;
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
+const OVERSIZE = /exceeds maximum allowed tokens/;
+const TOP_RESULTS = 3;
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n) : s);
 
@@ -37,6 +39,22 @@ function textOf(content) {
       return '';
     })
     .join('\n');
+}
+
+// Text bytes of a tool_result's content. Images and documents are not text and count 0.
+function resultBytes(content) {
+  if (typeof content === 'string') return Buffer.byteLength(content);
+  if (!Array.isArray(content)) return 0;
+  return content.reduce((sum, c) => {
+    if (typeof c === 'string') return sum + Buffer.byteLength(c);
+    return c && c.type === 'text' && typeof c.text === 'string' ? sum + Buffer.byteLength(c.text) : sum;
+  }, 0);
+}
+
+const toKb = (bytes) => Math.round((bytes / 1024) * 10) / 10;
+
+function resultKb(content) {
+  return toKb(resultBytes(content));
 }
 
 function withoutCoachLines(text) {
@@ -78,10 +96,53 @@ function isCoachCall(entry) {
     && x.name === 'Skill' && x.input && typeof x.input.skill === 'string' && x.input.skill.startsWith('skill-coach:'));
 }
 
+function emptyTokens() {
+  return { input: 0, cache_creation: 0, cache_read: 0, output: 0 };
+}
+
+// Claude Code writes one line per content block of a message, each repeating the message's
+// usage, so a message counts once. A line without an id counts on its own.
+function addUsage(tokens, seen, entry) {
+  const message = entry.message || {};
+  if (message.id) {
+    if (seen.has(message.id)) return;
+    seen.add(message.id);
+  }
+  const u = message.usage;
+  if (!u || typeof u !== 'object') return;
+  tokens.input += Number(u.input_tokens) || 0;
+  tokens.cache_creation += Number(u.cache_creation_input_tokens) || 0;
+  tokens.cache_read += Number(u.cache_read_input_tokens) || 0;
+  tokens.output += Number(u.output_tokens) || 0;
+}
+
+// The text a typed command carries: its name and its arguments, without the tags.
+function typedCommandText(raw) {
+  const part = (tag) => {
+    const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(raw);
+    return m ? m[1].trim() : '';
+  };
+  return [part('command-name'), part('command-args')].filter(Boolean).join(' ');
+}
+
+// What the user asked for before the run: the text of a typed command, or the last
+// genuine user message before a Skill-tool start.
+function startedBy(entries, start) {
+  const first = entries[start];
+  if (first.type === 'user') return clip(typedCommandText(textOf(first.message && first.message.content)), 500) || null;
+  for (let i = start - 1; i >= 0; i--) {
+    const text = genuineUserText(entries[i]);
+    if (text !== null) return clip(text, 500);
+  }
+  return null;
+}
+
 function emptyFacts(skill) {
   return {
     skill, found: false, start_time: null, end_time: null, tool_calls: 0, tool_errors: [],
     excluded_errors: 0, rejections: [], subagents: [], user_messages: [], final_answer: '',
+    results: { count: 0, total_kb: 0, largest: [], oversize_errors: 0 },
+    tokens: emptyTokens(), started_by: null,
   };
 }
 
@@ -103,7 +164,15 @@ function readRun(lines, skill) {
 
   facts.found = true;
   facts.start_time = entries[start].timestamp || null;
+  facts.started_by = startedBy(entries, start);
   const toolNames = {};
+  const sizes = [];
+  const seenMessages = new Set();
+  // The call that starts the run only loads the skill; its result is not the skill's work.
+  const startContent = entries[start].message && entries[start].message.content;
+  const launcher = Array.isArray(startContent)
+    ? startContent.find((x) => x && x.type === 'tool_use' && x.name === 'Skill' && x.input && x.input.skill === skill)
+    : null;
   let sawAssistantText = false;
   // skill-coach's own end-of-run call closes the run; nothing after it is the skill's work.
   const marker = entries.findIndex((e, i) => i > start && isCoachCall(e));
@@ -129,6 +198,7 @@ function readRun(lines, skill) {
       end = i;
       break;
     }
+    if (e.type === 'assistant') addUsage(facts.tokens, seenMessages, e);
     if (e.type === 'assistant' && Array.isArray(content)) {
       for (const item of content) {
         if (!item) continue;
@@ -151,14 +221,16 @@ function readRun(lines, skill) {
     const results = toolResults(e);
     if (results.length > 0) {
       for (const r of results) {
+        const tool = toolNames[r.tool_use_id] || '';
+        if (!launcher || r.tool_use_id !== launcher.id) sizes.push({ tool, bytes: resultBytes(r.content) });
         if (!r.is_error) continue;
         const text = textOf(r.content);
-        const tool = toolNames[r.tool_use_id] || '';
         if (text.includes(REJECTION)) {
           const said = text.match(/the user said:\s*([\s\S]*)$/i);
           facts.rejections.push({ tool, text: clip(said ? said[1].trim() : '', 300) });
         } else if (EXCLUDED.some((p) => p.test(text))) {
           facts.excluded_errors += 1;
+          if (OVERSIZE.test(text)) facts.results.oversize_errors += 1;
         } else {
           facts.tool_errors.push({ tool, text: clip(text, 300) });
         }
@@ -176,6 +248,11 @@ function readRun(lines, skill) {
     }
     turnTexts = [];
   }
+
+  facts.results.count = sizes.length;
+  facts.results.total_kb = toKb(sizes.reduce((sum, x) => sum + x.bytes, 0));
+  facts.results.largest = [...sizes].sort((a, b) => b.bytes - a.bytes).slice(0, TOP_RESULTS)
+    .map((x) => ({ tool: x.tool, kb: toKb(x.bytes) }));
 
   // The answer is everything the assistant said in its final turn.
   const answer = turnTexts.join('\n\n');
@@ -208,4 +285,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { readRun, isLikelyCorrection };
+module.exports = { readRun, isLikelyCorrection, resultKb };

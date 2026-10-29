@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { readRun, isLikelyCorrection } = require('../scripts/read-run.js');
+const { readRun, isLikelyCorrection, resultKb } = require('../scripts/read-run.js');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'transcript-basic.jsonl');
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'read-run.js');
@@ -190,4 +190,126 @@ test('CLI reports an unreadable transcript', () => {
   const r = spawnSync(process.execPath, [SCRIPT, '--transcript', '/nonexistent/x.jsonl', '--skill', 'demo-skill'], { encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.ok(JSON.parse(r.stdout).error);
+});
+
+const SKILL_START = (ts) => assistantTool(ts, 's1', 'Skill', { skill: 'demo-skill' });
+const USAGE = { input_tokens: 100, cache_creation_input_tokens: 10, cache_read_input_tokens: 1000, output_tokens: 5 };
+// Claude Code writes one line per content block of a message; each line repeats the message's id and usage.
+const assistantMessage = (ts, id, content, usage = USAGE) => JSON.stringify({ type: 'assistant', timestamp: ts, message: { id, role: 'assistant', content, usage } });
+
+test('result sizes are measured and the largest named', () => {
+  const r = readRun([
+    SKILL_START('g0'), toolResult('g1', 's1', 'loaded'),
+    assistantTool('g2', 'b1', 'Bash', {}), toolResult('g3', 'b1', 'x'.repeat(50 * 1024)),
+    assistantTool('g4', 'b2', 'Bash', {}), toolResult('g5', 'b2', 'y'.repeat(2 * 1024)),
+  ], 'demo-skill');
+  assert.equal(r.results.count, 2);
+  assert.deepEqual(r.results.largest[0], { tool: 'Bash', kb: 50 });
+  assert.equal(r.results.total_kb, 52);
+  assert.equal(r.results.oversize_errors, 0);
+});
+
+test('only the three largest results are listed, biggest first', () => {
+  const sizes = [1, 9, 4, 7];
+  const lines = [SKILL_START('k0')];
+  sizes.forEach((kb, i) => lines.push(assistantTool(`k${i}a`, `b${i}`, 'Bash', {}), toolResult(`k${i}b`, `b${i}`, 'z'.repeat(kb * 1024))));
+  const r = readRun(lines, 'demo-skill');
+  assert.deepEqual(r.results.largest.map((x) => x.kb), [9, 7, 4]);
+  assert.equal(r.results.count, 4);
+});
+
+test('images never count toward result size', () => {
+  const r = readRun([
+    SKILL_START('h0'), toolResult('h1', 's1', 'loaded'),
+    assistantTool('h2', 'r1', 'Read', {}),
+    toolResult('h3', 'r1', [{ type: 'image', source: { data: 'A'.repeat(300000) } }]),
+  ], 'demo-skill');
+  assert.equal(r.results.largest[0].kb, 0);
+  assert.equal(r.results.total_kb, 0);
+});
+
+test('an over-limit result is counted, not blamed', () => {
+  const r = readRun([
+    SKILL_START('i0'), toolResult('i1', 's1', 'loaded'),
+    assistantTool('i2', 'r1', 'Read', {}),
+    toolResult('i3', 'r1', 'File content (31000 tokens) exceeds maximum allowed tokens (25000). Use offset and limit.', true),
+  ], 'demo-skill');
+  assert.equal(r.results.oversize_errors, 1);
+  assert.equal(r.tool_errors.length, 0);
+  assert.equal(r.excluded_errors, 1);
+});
+
+test('results and tokens stop at the run-end call', () => {
+  const r = readRun([
+    SKILL_START('l0'), toolResult('l1', 's1', 'loaded'),
+    assistantMessage('l2', 'm1', [{ type: 'tool_use', id: 'b1', name: 'Bash', input: {} }]), toolResult('l3', 'b1', 'x'.repeat(3 * 1024)),
+    assistantMessage('l4', 'm2', [{ type: 'tool_use', id: 'r1', name: 'Skill', input: { skill: 'skill-coach:run-end' } }]),
+    toolResult('l5', 'r1', 'q'.repeat(60 * 1024)),
+    assistantMessage('l6', 'm3', [{ type: 'text', text: 'late' }]),
+  ], 'demo-skill');
+  assert.equal(r.results.count, 1);
+  assert.equal(r.results.total_kb, 3);
+  assert.equal(r.tokens.input, 100);
+});
+
+test('tokens are counted once per message', () => {
+  const r = readRun([
+    SKILL_START('j0'), toolResult('j1', 's1', 'loaded'),
+    assistantMessage('j2', 'msg_1', [{ type: 'text', text: 'one' }]),
+    assistantMessage('j3', 'msg_1', [{ type: 'tool_use', id: 'b1', name: 'Bash', input: {} }]),
+    toolResult('j4', 'b1', 'ok'),
+    assistantMessage('j5', 'msg_2', [{ type: 'text', text: 'two' }]),
+  ], 'demo-skill');
+  assert.deepEqual(r.tokens, { input: 200, cache_creation: 20, cache_read: 2000, output: 10 });
+});
+
+test('assistant lines without an id each count', () => {
+  const r = readRun([
+    SKILL_START('m0'),
+    assistantMessage('m1', undefined, [{ type: 'text', text: 'one' }]),
+    assistantMessage('m2', undefined, [{ type: 'text', text: 'two' }]),
+  ], 'demo-skill');
+  assert.equal(r.tokens.input, 200);
+  assert.equal(r.tokens.output, 10);
+});
+
+test('the prompt that started the run is kept', () => {
+  const r = readRun([
+    userLine('n0', 'an older question'),
+    assistantText('n1', 'an older answer'),
+    userLine('n2', 'check the export and also list the failures'),
+    SKILL_START('n3'),
+  ], 'demo-skill');
+  assert.equal(r.started_by, 'check the export and also list the failures');
+});
+
+test('started_by is clipped, and null when nothing came before', () => {
+  const clipped = readRun([userLine('o0', 'w'.repeat(900)), SKILL_START('o1')], 'demo-skill');
+  assert.equal(clipped.started_by.length, 500);
+  assert.equal(readRun([SKILL_START('o2')], 'demo-skill').started_by, null);
+});
+
+test('a typed command starts the run with its own text', () => {
+  const r = readRun([
+    userLine('p0', 'an unrelated earlier message'),
+    userLine('p1', '<command-name>/demo-skill</command-name><command-args>last week</command-args>'),
+    assistantText('p2', 'typed answer'),
+  ], 'demo-skill');
+  assert.ok(r.started_by.includes('last week'));
+  assert.ok(!r.started_by.includes('<command'));
+  assert.ok(!r.started_by.includes('earlier'));
+});
+
+test('a run that is not found has empty result and token facts', () => {
+  const r = readRun([userLine('q0', 'hello')], 'demo-skill');
+  assert.deepEqual(r.results, { count: 0, total_kb: 0, largest: [], oversize_errors: 0 });
+  assert.deepEqual(r.tokens, { input: 0, cache_creation: 0, cache_read: 0, output: 0 });
+  assert.equal(r.started_by, null);
+});
+
+test('resultKb counts text bytes only, to one decimal', () => {
+  assert.equal(resultKb('x'.repeat(1536)), 1.5);
+  assert.equal(resultKb([{ type: 'text', text: 'a' }, { type: 'text', text: 'é' }]), 0);
+  assert.equal(resultKb([{ type: 'text', text: 'x'.repeat(2048) }, { type: 'image', source: { data: 'A'.repeat(9999) } }, { type: 'document', source: { data: 'B'.repeat(9999) } }]), 2);
+  assert.equal(resultKb(undefined), 0);
 });
