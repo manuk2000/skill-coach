@@ -6,12 +6,17 @@
 //   node log-run.js typed   — UserPromptSubmit (only prompts starting with "/")
 // It must never get in the way of a skill: it always exits 0, and prints only a short
 // note for a connected skill (which run this is, plus a spot check every 10th run).
+// When skill-coach:run-end starts it also reads the run that is ending, and prints a
+// cost note if that run (or one of its subagents) received a very large tool result.
 
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { readRun, subagentReader } = require('./read-run.js');
 
 const SPOT_CHECK_EVERY = 10;
+const RUN_END = 'skill-coach:run-end';
+const DEFAULT_LARGE_RESULT_KB = 40;
 
 function dataDir(env) {
   if (env.SKILL_COACH_DATA) return env.SKILL_COACH_DATA;
@@ -85,6 +90,79 @@ function countRuns(ledgerPath, skill) {
   return n;
 }
 
+// The size, in KB, from which one tool result starts a cost check: the skill's own
+// setting, else the default for all skills, else 40.
+function largeResultKb(dir, skill) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
+    const own = config.skills && config.skills[skill];
+    for (const value of [own && own.large_result_kb, config.defaults && config.defaults.large_result_kb]) {
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+  } catch {
+    // No readable config: use the default.
+  }
+  return DEFAULT_LARGE_RESULT_KB;
+}
+
+// The run that is ending: the newest run row of this session and agent (a row with no
+// agent when the event has none) that is not skill-coach's own.
+function endedRun(ledgerPath, session, agent) {
+  if (!session) return null;
+  let text;
+  try {
+    text = fs.readFileSync(ledgerPath, 'utf8');
+  } catch {
+    return null;
+  }
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes(session)) continue;
+    let row;
+    try {
+      row = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (!row || row.type !== 'run' || row.session !== session) continue;
+    if (agent ? row.agent !== agent : row.agent) continue;
+    if (typeof row.skill !== 'string' || row.skill.startsWith('skill-coach:')) continue;
+    return row;
+  }
+  return null;
+}
+
+// One sentence when the run's biggest result is at or over the limit: the main run first
+// (its biggest result, or an over-limit error), then a subagent's biggest result.
+function costNote(skill, facts, limitKb) {
+  const head = `skill-coach: cost check due for ${skill} — `;
+  const tail = '; score this run.';
+  const results = facts.results || {};
+  const top = results.largest && results.largest[0];
+  if (top && top.kb >= limitKb) return `${head}largest result ${Math.round(top.kb)} KB from ${top.tool || 'a tool'} (main)${tail}`;
+  if (results.oversize_errors > 0) return `${head}a result was over the tool's size limit (main)${tail}`;
+  let big = null;
+  for (const sub of facts.subagents || []) {
+    if (sub.largest_kb >= limitKb && (!big || sub.largest_kb > big.largest_kb)) big = sub;
+  }
+  if (big) return `${head}largest result ${Math.round(big.largest_kb)} KB from ${big.largest_tool || 'a tool'} (subagent)${tail}`;
+  return null;
+}
+
+// Reads the transcript of the run that run-end is about to score. Any trouble means no note.
+function runEndNote(event, ledger, dir, cwd, home) {
+  try {
+    const row = endedRun(ledger, event.session_id, event.agent_id);
+    if (!row || !row.transcript) return null;
+    if (!isConnected(row.skill, row.cwd, home) && !isConnected(row.skill, cwd, home)) return null;
+    const lines = fs.readFileSync(row.transcript, 'utf8').split('\n');
+    const facts = readRun(lines, row.skill, { readSubagent: subagentReader(row.transcript) });
+    return facts.found ? costNote(row.skill, facts, largeResultKb(dir, row.skill)) : null;
+  } catch {
+    return null;
+  }
+}
+
 function transcriptFor(event) {
   const t = event.transcript_path || null;
   if (t && event.agent_id && event.session_id) {
@@ -133,6 +211,9 @@ function main(mode, stdinText, env, now) {
           additionalContext: note,
         },
       });
+    } else if (mode === 'tool' && skill === RUN_END) {
+      const note = runEndNote(event, ledger, dir, cwd, home);
+      if (note) output = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: note } });
     }
     return { line, output };
   } catch {
@@ -151,4 +232,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { dataDir, skillFromEvent, frontmatter, isConnected, countRuns, main };
+module.exports = { dataDir, skillFromEvent, frontmatter, isConnected, countRuns, largeResultKb, endedRun, costNote, main };

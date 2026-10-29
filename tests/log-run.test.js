@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { main, isConnected, countRuns, dataDir } = require('../scripts/log-run.js');
+const { main, isConnected, countRuns, dataDir, largeResultKb, endedRun, costNote } = require('../scripts/log-run.js');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'log-run.js');
 const FIX = path.join(__dirname, 'fixtures');
@@ -219,4 +219,203 @@ test('CLI records a real event', () => {
   const r = spawnSync(process.execPath, [SCRIPT, 'tool'], { input: s.event('event-pretooluse-skill.json'), env: { ...process.env, ...s.env }, encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.equal(s.readLedger()[0].skill, 'demo-skill');
+});
+
+// ---- cost note when run-end starts ----
+
+const SESSION = '00000000-0000-0000-0000-000000000000';
+const AGENT = 'a0000000000000001';
+const NOT_CONNECTED = '---\nname: demo-skill\n---\n# Demo\n';
+
+const entry = (type, content, extra = {}) => ({ type, timestamp: 't', message: { role: type, content }, ...extra });
+const skillStart = () => entry('assistant', [{ type: 'tool_use', id: 's1', name: 'Skill', input: { skill: 'demo-skill' } }]);
+const toolUse = (id, name, input = {}) => entry('assistant', [{ type: 'tool_use', id, name, input }]);
+const toolResultOf = (id, content, isError = false) => entry('user', [{ type: 'tool_result', tool_use_id: id, is_error: isError, content }]);
+// A run whose one tool returns `content`.
+const runWith = (tool, content, isError = false) => [skillStart(), toolResultOf('s1', 'loaded'), toolUse('b1', tool), toolResultOf('b1', content, isError)];
+const kb = (n) => 'x'.repeat(n * 1024);
+const SMALL = runWith('fetch_records', kb(2));
+const note = (text) => `skill-coach: cost check due for demo-skill — ${text}; score this run.`;
+
+// Writes the transcript(s) and ledger row for one ended run, and returns the run-end event.
+function endScenario(s, { main = SMALL, sub = null, skillText = CONNECTED, agent = null, row = {}, eventExtra = {} }) {
+  const transcript = path.join(s.home, `${SESSION}.jsonl`);
+  const subPath = path.join(s.home, SESSION, 'subagents', `agent-${AGENT}.jsonl`);
+  const write = (file, entries) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  };
+  write(transcript, main);
+  if (sub) write(subPath, sub);
+  s.writeSkill(s.home, 'demo-skill', skillText);
+  fs.mkdirSync(s.env.SKILL_COACH_DATA, { recursive: true });
+  const base = { type: 'run', time: NOW.toISOString(), session: SESSION, cwd: s.project, skill: 'demo-skill', via: 'tool', n: 1 };
+  fs.appendFileSync(s.ledger, JSON.stringify({ ...base, transcript: agent ? subPath : transcript, ...(agent ? { agent } : {}), ...row }) + '\n');
+  return s.event('event-pretooluse-run-end.json', { transcript_path: transcript, ...(agent ? { agent_id: agent } : {}), ...eventExtra });
+}
+const noteOf = (r) => (r.output ? JSON.parse(r.output).hookSpecificOutput : null);
+
+test('largeResultKb reads the skill, then defaults, then 40', () => {
+  const s = setup();
+  const dir = s.env.SKILL_COACH_DATA;
+  assert.equal(largeResultKb(dir, 'demo-skill'), 40);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ defaults: { text_auto: 'on' }, skills: { 'demo-skill': {} } }));
+  assert.equal(largeResultKb(dir, 'demo-skill'), 40);
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ defaults: { large_result_kb: 60 }, skills: { 'demo-skill': { large_result_kb: 20 } } }));
+  assert.equal(largeResultKb(dir, 'demo-skill'), 20);
+  assert.equal(largeResultKb(dir, 'other-skill'), 60);
+  fs.writeFileSync(path.join(dir, 'config.json'), '{broken');
+  assert.equal(largeResultKb(dir, 'demo-skill'), 40);
+});
+
+test('costNote gives one of three sentences, main before subagent', () => {
+  const facts = (largest, oversize = 0, subs = []) => ({ results: { largest, oversize_errors: oversize }, subagents: subs });
+  const sub = (kbValue, tool) => ({ largest_kb: kbValue, largest_tool: tool });
+  assert.equal(costNote('demo-skill', facts([{ tool: 'Bash', kb: 49.6 }]), 40), note('largest result 50 KB from Bash (main)'));
+  assert.equal(costNote('demo-skill', facts([{ tool: 'Bash', kb: 2 }], 0, [sub(45, 'fetch_records')]), 40), note('largest result 45 KB from fetch_records (subagent)'));
+  assert.equal(costNote('demo-skill', facts([], 1), 40), note("a result was over the tool's size limit (main)"));
+  assert.equal(costNote('demo-skill', facts([{ tool: 'Bash', kb: 50 }], 1, [sub(90, 'fetch_records')]), 40), note('largest result 50 KB from Bash (main)'));
+  assert.equal(costNote('demo-skill', facts([], 1, [sub(90, 'fetch_records')]), 40), note("a result was over the tool's size limit (main)"));
+  assert.equal(costNote('demo-skill', facts([{ tool: 'Bash', kb: 39.9 }], 0, [sub(12, 'x'), sub(null, null)]), 40), null);
+  assert.equal(costNote('demo-skill', facts([{ tool: 'Bash', kb: 40 }]), 40), note('largest result 40 KB from Bash (main)'));
+});
+
+test('endedRun picks the newest run of the session and the same agent', () => {
+  const s = setup();
+  fs.mkdirSync(s.env.SKILL_COACH_DATA, { recursive: true });
+  const rows = [
+    { type: 'run', session: SESSION, skill: 'demo-a', n: 1 },
+    { type: 'run', session: SESSION, skill: 'demo-b', n: 1, agent: AGENT },
+    { type: 'run', session: 'other-session', skill: 'demo-c', n: 1 },
+    { type: 'run', session: SESSION, skill: 'skill-coach:run-end', n: 1 },
+    { type: 'note', session: SESSION, skill: 'demo-d' },
+  ];
+  fs.writeFileSync(s.ledger, rows.map((r) => JSON.stringify(r)).join('\n') + '\n{broken\n');
+  assert.equal(endedRun(s.ledger, SESSION, undefined).skill, 'demo-a');
+  assert.equal(endedRun(s.ledger, SESSION, AGENT).skill, 'demo-b');
+  assert.equal(endedRun(s.ledger, SESSION, 'a-different-agent'), null);
+  assert.equal(endedRun(s.ledger, 'no-such-session'), null);
+  assert.equal(endedRun(path.join(s.home, 'nope.jsonl'), SESSION), null);
+});
+
+test('run-end after a 50 KB result prints the cost note', () => {
+  const s = setup();
+  const r = main('tool', endScenario(s, { main: runWith('fetch_records', kb(50)) }), s.env, NOW);
+  assert.deepEqual(noteOf(r), {
+    hookEventName: 'PreToolUse',
+    additionalContext: 'skill-coach: cost check due for demo-skill — largest result 50 KB from fetch_records (main); score this run.',
+  });
+  assert.equal(r.line.skill, 'skill-coach:run-end');
+  assert.equal(s.readLedger().length, 2);
+});
+
+test('a higher limit in config.json silences the note', () => {
+  const s = setup();
+  const event = endScenario(s, { main: runWith('fetch_records', kb(50)) });
+  fs.writeFileSync(path.join(s.env.SKILL_COACH_DATA, 'config.json'), JSON.stringify({ skills: { 'demo-skill': { large_result_kb: 100 } } }));
+  assert.equal(main('tool', event, s.env, NOW).output, null);
+});
+
+test('a 45 KB result inside a subagent prints the subagent note', () => {
+  const s = setup();
+  const main1 = [skillStart(), toolResultOf('s1', 'loaded'), toolUse('ag1', 'Agent', { description: 'fetch' }),
+    { ...toolResultOf('ag1', 'report'), toolUseResult: { agentId: AGENT, resolvedModel: 'm' } }];
+  const sub = [toolUse('f1', 'fetch_records'), toolResultOf('f1', kb(45))];
+  const r = main('tool', endScenario(s, { main: main1, sub }), s.env, NOW);
+  assert.equal(noteOf(r).additionalContext, note('largest result 45 KB from fetch_records (subagent)'));
+});
+
+test('an over-limit error prints the size-limit note', () => {
+  const s = setup();
+  const error = 'File content (31000 tokens) exceeds maximum allowed tokens (25000). Use offset and limit.';
+  const r = main('tool', endScenario(s, { main: runWith('Read', error, true) }), s.env, NOW);
+  assert.equal(noteOf(r).additionalContext, note("a result was over the tool's size limit (main)"));
+});
+
+test('small results print no cost note', () => {
+  const s = setup();
+  const r = main('tool', endScenario(s, {}), s.env, NOW);
+  assert.equal(r.output, null);
+  assert.equal(r.line.skill, 'skill-coach:run-end');
+});
+
+test('screenshots never start a cost check', () => {
+  const s = setup();
+  const image = [{ type: 'image', source: { type: 'base64', data: 'A'.repeat(300000) } }];
+  const main1 = [skillStart(), toolResultOf('s1', 'loaded'), toolUse('ag1', 'Agent', {}),
+    { ...toolResultOf('ag1', 'report'), toolUseResult: { agentId: AGENT } }, ...runWith('Read', image).slice(2)];
+  const sub = [toolUse('f1', 'screenshot'), toolResultOf('f1', image)];
+  assert.equal(main('tool', endScenario(s, { main: main1, sub }), s.env, NOW).output, null);
+});
+
+test('an unconnected skill gets no cost note', () => {
+  const s = setup();
+  const r = main('tool', endScenario(s, { main: runWith('fetch_records', kb(50)), skillText: NOT_CONNECTED }), s.env, NOW);
+  assert.equal(r.output, null);
+  assert.equal(r.line.skill, 'skill-coach:run-end');
+});
+
+test('a run inside a subagent is read from its own transcript', () => {
+  const big = runWith('fetch_records', kb(50));
+  // The big result is only in the subagent's transcript: the note names it.
+  let s = setup();
+  let event = endScenario(s, { main: SMALL, sub: big, agent: AGENT });
+  assert.equal(noteOf(main('tool', event, s.env, NOW)).additionalContext, note('largest result 50 KB from fetch_records (main)'));
+  // The big result is only in the main transcript: the subagent's run was small.
+  s = setup();
+  event = endScenario(s, { main: big, sub: SMALL, agent: AGENT });
+  assert.equal(main('tool', event, s.env, NOW).output, null);
+});
+
+test('a run-end outside a subagent ignores the subagent rows', () => {
+  const s = setup();
+  const event = endScenario(s, { main: SMALL });
+  // A newer row of the same session that belongs to a subagent, with a big result.
+  const subPath = path.join(s.home, SESSION, 'subagents', `agent-${AGENT}.jsonl`);
+  fs.mkdirSync(path.dirname(subPath), { recursive: true });
+  fs.writeFileSync(subPath, runWith('fetch_records', kb(50)).map((e) => JSON.stringify(e)).join('\n') + '\n');
+  fs.appendFileSync(s.ledger, JSON.stringify({ type: 'run', session: SESSION, transcript: subPath, cwd: s.project, skill: 'demo-skill', agent: AGENT, n: 2 }) + '\n');
+  assert.equal(main('tool', event, s.env, NOW).output, null);
+});
+
+test('a long transcript is read in under 2 seconds', () => {
+  const s = setup();
+  const lines = [skillStart(), toolResultOf('s1', 'loaded')];
+  for (let i = 0; i < 9998; i++) lines.push(toolUse(`b${i}`, 'Bash', { command: 'ls' }), toolResultOf(`b${i}`, 'some output '.repeat(40)));
+  lines.push(toolUse('big', 'fetch_records'), toolResultOf('big', kb(50)));
+  assert.ok(lines.length >= 20000);
+  const event = endScenario(s, { main: lines });
+  const started = Date.now();
+  const r = main('tool', event, s.env, NOW);
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+  assert.equal(noteOf(r).additionalContext, note('largest result 50 KB from fetch_records (main)'));
+});
+
+test('a missing transcript prints nothing and exits 0', () => {
+  const s = setup();
+  const event = endScenario(s, { row: { transcript: path.join(s.home, 'gone.jsonl') } });
+  const r = main('tool', event, s.env, NOW);
+  assert.equal(r.output, null);
+  assert.equal(r.line.skill, 'skill-coach:run-end');
+  const cli = spawnSync(process.execPath, [SCRIPT, 'tool'], { input: event, env: { ...process.env, ...s.env }, encoding: 'utf8' });
+  assert.equal(cli.status, 0);
+  assert.equal(cli.stdout, '');
+});
+
+test('run-end with no earlier run still logs its own line and prints nothing', () => {
+  const s = setup();
+  const r = main('tool', s.event('event-pretooluse-run-end.json'), s.env, NOW);
+  assert.equal(r.output, null);
+  assert.equal(r.line.skill, 'skill-coach:run-end');
+  assert.equal(s.readLedger().length, 1);
+});
+
+test('CLI prints the cost note as hook output', () => {
+  const s = setup();
+  const event = endScenario(s, { main: runWith('fetch_records', kb(50)) });
+  const r = spawnSync(process.execPath, [SCRIPT, 'tool'], { input: event, env: { ...process.env, ...s.env }, encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /^skill-coach: cost check due for demo-skill — largest result 50 KB/);
 });
