@@ -16,7 +16,8 @@ Follow these steps in order. Most runs stop at step 3, which costs nothing.
 
 - `plugin_root` = this skill's base directory, two levels up (`<base>/../..`).
 - `data_dir` = `~/.claude/self-improvement` (expand `~`).
-- `skill` = the connected skill that just ran. `skill_dir` = its folder.
+- `skill` = the skill named in this call's argument — the connected skill passes its
+  own name — else the connected skill that just ran. `skill_dir` = its folder.
 - `rubric_path` = `skill_dir` joined with the `rubric:` value under the skill's
   `skill-coach:` frontmatter block.
 - `hand_over` = the lines of the skill's `## Self-improvement` section after the line
@@ -57,7 +58,8 @@ of these happened:
 Set `reason` to `analyze`, `correction`, `trouble` (an error, or more than 20 tool
 calls), `request`, `cost` or `spot-check` accordingly; when several apply, take the
 first in that order. `cost_note` is kept whatever the reason, and is `null` when there
-was no such note.
+was no such note. Seeing a request only starts the scoring: whether it is lasting or
+one-off is the judge's call.
 
 Then skip, printing nothing, when:
 
@@ -67,7 +69,8 @@ Then skip, printing nothing, when:
   `<data_dir>/notes/<skill>.md` has a Scores row whose session column equals the
   first 8 characters of `session_id`. There are two exceptions: a `correction`
   re-run of the same run replaces that scoring rather than adding a second one, and a
-  `request` run is never skipped — it adds a new Scores row of its own.
+  run where a request was seen (the request bullet above applied, whatever `reason`
+  became) is never skipped — it adds a new Scores row of its own.
 
 ## 4. First time for this skill
 
@@ -112,4 +115,5 @@ step 4 if there is one. Never invent or round a number.
 If the user's next message corrects this run, invoke run-end again for the same run
 with `reason: correction`. If it asks to add something to the skill ("add this to the
 skill", "do this every time"), invoke run-end again for the same run with
-`reason: request`.
+`reason: request`. Either way, pass the skill's name as the call's argument, as the
+skill itself does.

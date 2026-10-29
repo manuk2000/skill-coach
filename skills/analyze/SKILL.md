@@ -39,7 +39,9 @@ reject each, in one message, and wait for the answer.
 
 - **Approve** → call the subagent `skill-coach:worker` with `plugin_root`,
   `data_dir`, the proposal's skill with its `skill_dir` and `rubric_path`,
-  `session_id`, `decision: null` and `approved: <proposal id>`. Print its footer.
+  `session_id`, `decision: null` and `approved: <proposal id>`. A proposal with
+  `- file N:` lines also gets `family`: the output of
+  `node <plugin_root>/scripts/family.js --skill <skill>`. Print its footer.
 - **Reject** → Edit the proposal's status to `rejected`, add
   `- reason: <the user's words>`, and set the key's status in the notes back to
   `open`.
@@ -62,7 +64,8 @@ members it was seen in ("in 2 of 3 members").
 Count **rejections** from the `- rejected-by-undo:` lines in the notes — only the undo
 skill writes them, so a recovered or failed change is never counted as a rejection.
 For each change the user undid (not kind `connect`), read the same section of the file now (for a
-`family` change, the family file — its pair 1). If the user
+`family` change, the family file — the pair whose file lies in its `- family:` folder;
+a change of pointer pairs only has none, so read its first pair's file). If the user
 has since changed it themselves, that is an **edit**: add
 `- edited: <today> (<change id>): <one line on what the user wrote instead>` under the
 key in the notes (once per change), and show the difference.
@@ -84,5 +87,5 @@ and suggest `/skill-coach:connect <skill>` for the most used ones.
 ## 6. Scoring this session (period `session` only)
 
 For each connected skill with a `run` line in this session and no Scores row for
-this session yet: invoke `skill-coach:run-end` for it with `reason: analyze`. Other
-periods only report and call no agent.
+this session yet: invoke `skill-coach:run-end` with the skill's name as the call's
+argument and `reason: analyze`. Other periods only report and call no agent.
