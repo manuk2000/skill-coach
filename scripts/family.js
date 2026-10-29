@@ -34,12 +34,28 @@ function folder(value, home) {
   return v || null;
 }
 
+// A YAML scalar as written: quotes removed ('' inside single quotes is one '), and a
+// trailing comment dropped.
+function scalar(raw) {
+  const v = raw.trim();
+  const single = /^'((?:[^']|'')*)'\s*(?:#.*)?$/.exec(v);
+  if (single) return single[1].replace(/''/g, "'");
+  const double = /^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/.exec(v);
+  if (double) return double[1].replace(/\\(.)/g, '$1');
+  return v.replace(/\s+#.*$/, '');
+}
+
+// The `shared:` key of the block itself, at the indentation of its first key — a deeper
+// `shared:` (under a nested key, or inside a folded value) is not the family.
 function sharedOf(text, home) {
   const block = coachBlock(text);
   if (!block) return null;
+  const first = block.find((l) => l.trim());
+  if (!first) return null;
+  const indent = /^\s*/.exec(first)[0];
   for (const line of block) {
-    const m = /^\s+shared:\s*(.*)$/.exec(line);
-    if (m) return folder(m[1], home);
+    const m = line.startsWith(indent) ? /^shared:\s*(.*)$/.exec(line.slice(indent.length)) : null;
+    if (m) return folder(scalar(m[1]), home);
   }
   return null;
 }

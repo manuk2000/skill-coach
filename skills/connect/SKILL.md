@@ -36,8 +36,8 @@ saving the rules, the final yes — is asked the same way:
 - In plain words: one short sentence, no rubric or plugin terms (unit, must-not,
   rubric, logic, hook), and an example when it helps.
 - The suggested answer is the first option, its label ending in `(Recommended)`.
-  Every option gets a one-line description of what choosing it does. A header has at
-  most 12 characters.
+  The family question is the one exception: no option is marked. Every option gets a
+  one-line description of what choosing it does. A header has at most 12 characters.
 - When the tool is not available, ask the same question as plain text, one per
   message, and stop until the user answers.
 
@@ -57,28 +57,27 @@ the user gave one).
 - `state: "connected"` and `shared_candidates` is empty → say it is already connected and
   up to date, whether its rubric exists, and stop.
 - `state: "upgrade"`, or `state: "connected"` with `shared_candidates` → it is already
-  connected, but its pointer sentence is out of date or it could join a family. Decide
-  the family below, then follow "Upgrade a connected skill" and not steps 2–4.
-- `state: "not-connected"` → decide the family below, then continue with step 2.
+  connected, but its pointer sentence is out of date or it could join a family. Ask
+  about the family below, then follow "Upgrade a connected skill" and not steps 2–4.
+- `state: "not-connected"` → ask about the family below, then continue with step 2.
 - `warning` present → say it once (a project skill's change shows in git).
 
 ## Family
 
-`shared_candidates` lists folders this skill reads that at least one other skill reads
-too. Notes stay per skill: the judge reads every member's notes, and facts that two or
-more members use live once, in the shared folder. Decide it once, now, and pass the
-answer as `--shared '<folder>'` (single quotes, so `~` stays as written) on every
-`<plan>` run from here on.
+`shared_candidates` lists folders holding files this skill reads that at least one
+other skill reads too (home, Claude Code's own config folders and secret-like folders
+are never listed). Notes stay per skill: the judge reads every member's notes, and
+facts that two or more members use live once, in `.md` files of the shared folder.
+Ask it once, now, and pass the answer as `--shared '<folder>'` (single quotes, so `~`
+stays as written) on every `<plan>` run from here on.
 
-- **None** → no family; show no line and pass no `--shared`.
-- **Exactly one** → decided, never asked. Show it as one line under *"Decided from your
-  skill"*: *"Family: `<folder>` — other skills read it too"* (in step 2 with the other
-  decided lines, or on its own when the rules already exist). A typed change to it —
-  another folder, or no family — is used as typed.
-- **Two or more** → one question, asked as in "How to ask": *"Which folder do these
-  skills share?"* — header `Family`, one option per folder (the first is
-  `(Recommended)`; each description says the skills that read the folder form one
-  family), and `No family`: nothing is added. A typed folder is used as typed.
+- **None** → no family; ask nothing and pass no `--shared`.
+- **One or more** → always one question, asked as in "How to ask" but with no option
+  marked `(Recommended)`: *"Do these skills share a folder for facts?"* — header
+  `Family`, one option per folder (its description: the skills that read files there
+  form one family, and skill-coach may write `.md` files in it), then `No family`:
+  nothing is added. A typed folder is used as typed. Never decide it for the user —
+  the folder is only a guess from paths the skills mention.
 
 ## 2. Rules first
 
@@ -87,8 +86,6 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
 - `rubric.exists` is true → keep it. The useful lines of the current
   `## Self-improvement` section (`existingSection`) become the hand-over line, as
   `Hand over: <them>`, or `Hand over: —` when there are none; the preview shows it.
-  A decided family is shown on its own, under the same *"Decided from your skill"*
-  heading.
 - `rubric.exists` is false:
   1. Call the subagent `skill-coach:rubric-builder` with `skill_dir` (the folder of
      `file`) and `plugin_root`.
@@ -103,8 +100,7 @@ The skill's `SKILL.md` must never point at a rules file that does not exist.
      rubric-builder again with `answers`: each question's `ask` with the user's
      answer in their words. Ask any new question it returns the same way.
   5. Show its `## Decided for you` first, under the heading *"Decided from your
-     skill — type a change if one is wrong"* — with the family line added to it when
-     one is decided; then the draft; then its
+     skill — type a change if one is wrong"*; then the draft; then its
      `## Problems in the skill` under the heading *"Not part of the rules — problems
      in the skill itself"* (leave it out when it says none).
      Ask *"Save these rules for `<skill>`?"* — `Save them (Recommended)`: writes
@@ -133,8 +129,8 @@ first if it does not exist.
 ## 4. Preview
 
 Write the agreed hand-over line to `<data_dir>/tmp/hand-over.txt` with the Write tool,
-then run `<plan>` again with the same `--cwd`/`--root` (and `--shared`, when a family is
-decided) plus `--hand-over-file <data_dir>/tmp/hand-over.txt`. Never pass the line as a shell
+then run `<plan>` again with the same `--cwd`/`--root` (and `--shared`, when the user
+chose a family) plus `--hand-over-file <data_dir>/tmp/hand-over.txt`. Never pass the line as a shell
 argument — backticks and `$` in it would be expanded. Show every edit in `edits`
 exactly as before → after: first the frontmatter (with its `shared:` line when there is
 a family), then the `## Self-improvement` section. `sectionMode` says whether the section replaces an old one, is added at the
@@ -171,10 +167,11 @@ The skill's rules, its hand-over line and its auto-fix setting stay as they are;
 and 3 are skipped.
 
 1. Run `<plan>` again with the same `--cwd`/`--root` plus `--shared '<folder>'` when the
-   family was decided. `state: "connected"` → nothing to change; say so and stop.
+   user chose a family. `state: "connected"` → nothing to change; say so and stop.
 2. `state: "upgrade"` → say in one line what changes, naming only what is true: *"The
    sentence that tells `<skill>` to call skill-coach now also covers corrections and
-   requests to add something"* and/or *"`<skill>` joins the family `<folder>`"*. Show every
+   requests to add something, and passes the skill's name"* and/or *"`<skill>` joins
+   the family `<folder>`"*. Show every
    edit in `edits` exactly as before → after (the `shared:` line in the frontmatter comes
    first, then the pointer sentence). Ask *"Make these <1 or 2> changes to `<skill>`'s
    SKILL.md?"* — header `Upgrade`; options `Yes, update it (Recommended)`: applies the

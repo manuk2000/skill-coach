@@ -16,8 +16,9 @@ const { sharedOf, folder } = require('./family.js');
 const DEFAULT_RUBRIC = 'references/rubric.md';
 const POINTER = [
   "At the end of every run — and again if the user's next message corrects the",
-  'result or asks to add something to the skill — invoke `skill-coach:run-end`.',
-  'Settings live in the skill-coach data folder, not here.',
+  'result or asks to add something to the skill — invoke `skill-coach:run-end`',
+  "with this skill's name as its argument. Settings live in the skill-coach data",
+  'folder, not here.',
 ];
 // Every pointer sentence ends with this line; run-end reads the hand-over after it.
 const POINTER_END = 'not here.';
@@ -25,6 +26,10 @@ const POINTER_END = 'not here.';
 const HEADING = /^##\s+Self-improvement\s*(\([^)]*\))?\s*$/i;
 
 const occurrences = (text, s) => text.split(s).length - 1;
+
+// A folder as a YAML value: plain when it is only path characters, else single-quoted
+// (a ' inside is written twice), so ` #` or `: ` in a typed folder cannot change the YAML.
+const yamlValue = (v) => (/^[\w~./-]+$/.test(v) && v !== '~' ? v : `'${v.replace(/'/g, "''")}'`);
 
 function sectionText(eol, handOver) {
   return ['## Self-improvement', '', ...POINTER, ...(handOver ? ['', handOver] : [])].join(eol);
@@ -59,15 +64,16 @@ function findHeading(lines) {
   return { at, end };
 }
 
-// The pointer sentence inside the section: from its first non-blank line through the first
-// line ending POINTER_END. Null when there is no section or no such line (connected by hand).
+// The pointer sentence inside the section: the paragraph that ends with the first line ending
+// POINTER_END. Null when there is no section or no such line (connected by hand).
 function pointerSpan(lines) {
   const found = findHeading(lines);
   if (!found || found.error) return null;
-  let from = found.at + 1;
-  while (from < found.end && !lines[from].trim()) from += 1;
-  for (let to = from; to < found.end; to++) {
-    if (lines[to].trimEnd().endsWith(POINTER_END)) return { heading: found.at, from, to };
+  for (let to = found.at + 1; to < found.end; to++) {
+    if (!lines[to].trimEnd().endsWith(POINTER_END)) continue;
+    let from = to;
+    while (from > found.at + 1 && lines[from - 1].trim()) from -= 1;
+    return { heading: found.at, from, to };
   }
   return null;
 }
@@ -80,6 +86,9 @@ function pointerEdit(text, lines, eol) {
   const old = lines.slice(span.from, span.to + 1);
   if (old.join(eol) === POINTER.join(eol)) return null;
   if (!old.some((l) => l.includes('skill-coach:run-end'))) return null;
+  if (old.some((l) => /^\s*Hand over:/.test(l))) {
+    return { error: 'a Hand over line sits inside the pointer sentence; update this skill by hand' };
+  }
   // Anchor on the sentence alone; if the same text is quoted elsewhere, take the heading with it.
   for (const start of [span.from, span.heading]) {
     const oldString = lines.slice(start, span.to + 1).join(eol);
@@ -91,7 +100,8 @@ function pointerEdit(text, lines, eol) {
   return { error: 'the existing pointer sentence is not unique; update this skill by hand' };
 }
 
-// The edit that adds `  shared: <folder>` as the last line of the skill-coach block.
+// The edit that adds `shared: <folder>` as the last line of the skill-coach block, indented
+// like the block's first key (a nested map or a folded value under a later key is deeper).
 function sharedEdit(text, lines, eol, fmEnd, shared) {
   let at = 1;
   while (at < fmEnd && !lines[at].startsWith('skill-coach:')) at += 1;
@@ -100,14 +110,17 @@ function sharedEdit(text, lines, eol, fmEnd, shared) {
     return { error: 'the skill-coach entry in the frontmatter is not a block; add the shared line by hand' };
   }
   let last = at;
+  let indent = null;
   for (let i = at + 1; i < fmEnd; i++) {
     if (lines[i].trim() && !/^\s/.test(lines[i])) break;
-    if (lines[i].trim()) last = i;
+    if (!lines[i].trim()) continue;
+    last = i;
+    if (indent === null) indent = /^\s*/.exec(lines[i])[0];
   }
-  const indent = last > at ? /^\s*/.exec(lines[last])[0] : '  ';
+  const line = `${indent || '  '}shared: ${yamlValue(shared)}`;
   for (let start = last; start >= 1; start--) {
     const old = lines.slice(start, last + 1).join(eol);
-    if (occurrences(text, old) === 1) return { old_string: old, new_string: `${old}${eol}${indent}shared: ${shared}` };
+    if (occurrences(text, old) === 1) return { old_string: old, new_string: `${old}${eol}${line}` };
   }
   return { error: 'no unique place to add the shared line' };
 }
@@ -152,7 +165,7 @@ function planConnect(text, { rubric = DEFAULT_RUBRIC, handOver = '', shared = ''
   }
 
   // Frontmatter: the shortest run of lines ending at the closing --- that occurs once.
-  const block = ['skill-coach:', `  rubric: ${rubric}`, ...(family ? [`  shared: ${family}`] : [])];
+  const block = ['skill-coach:', `  rubric: ${rubric}`, ...(family ? [`  shared: ${yamlValue(family)}`] : [])];
   let fmEdit = null;
   for (let start = fmEnd - 1; start >= 1 && !fmEdit; start--) {
     const old = lines.slice(start, fmEnd + 1).join(eol);
@@ -218,30 +231,40 @@ function listSkills({ home, cwd, ledger }) {
 
 // Path-like strings that start with ~/ or / — not the tail of a URL, a relative path or $HOME/….
 const PATH_LIKE = /(?<![\w/:.~$}-])(?:~\/|\/)[^\s`'")\]]*/g;
+// Claude Code's own folders inside a .claude folder: never a family folder, nor anything under them.
+const CONFIG_FOLDERS = ['hooks', 'commands', 'agents', 'skills', 'plugins', 'projects', 'rules', 'output-styles', 'workflows'];
+// A folder whose path names a secret is never offered, whatever it holds.
+const SECRET_LIKE = /secret|credential|password|token/i;
 
-// The folders a SKILL.md names, one spelling each. A path whose last segment has a dot is a file
-// (its folder is the directory above); a trailing slash always means a folder. An absolute path
-// needs two segments, so slash commands such as /clear are not folders.
+function isFile(p) {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// The folders of the files a SKILL.md names that exist on disk, one spelling each. A bare
+// folder, an API path, a placeholder or a glob is never a file, so it never counts.
 function referencedFolders(text, home) {
   const out = new Set();
   for (const [raw] of text.matchAll(PATH_LIKE)) {
-    let p = raw.replace(/[.,;:]+$/, '');
-    // A placeholder or glob (<repo>, ${X}, *.md) ends the concrete part: keep the folder before it.
-    const hole = p.search(/[<>{}$*?|]/);
-    if (hole >= 0) p = p.slice(0, p.lastIndexOf('/', hole) + 1);
-    if (p.startsWith('/') && p.split('/').filter(Boolean).length < 2) continue;
-    const isFile = !p.endsWith('/') && p.slice(p.lastIndexOf('/') + 1).includes('.');
-    const dir = folder(isFile ? path.posix.dirname(p) : p, home);
-    if (dir) out.add(dir);
+    const p = raw.replace(/[.,;:]+$/, '');
+    if (p.endsWith('/') || /[<>{}$*?|]/.test(p)) continue;
+    const file = folder(p, home);
+    if (file && isFile(file)) out.add(path.dirname(file));
   }
   return out;
 }
 
-// Folders this skill's SKILL.md reads that at least one other skill's SKILL.md reads too — the
-// candidates for a shared folder (`shared:`). Read-only. `dir` pins the skill's own folder.
+// Folders holding files this skill's SKILL.md reads that at least one other skill's SKILL.md
+// reads too — the candidates for a shared folder (`shared:`). Home, the .claude folders with
+// Claude Code's own config, the data folder and any secret-like folder are never candidates.
+// Read-only. `dir` pins the skill's own folder.
 function sharedCandidates(skill, { home, cwd, env = process.env, dir } = {}) {
   const homeDir = path.resolve(home);
-  const roots = [...new Set([home, cwd].map((r) => path.resolve(r)))].map((r) => path.join(r, '.claude', 'skills'));
+  const bases = [...new Set([home, cwd].map((r) => path.resolve(r)))];
+  const roots = bases.map((r) => path.join(r, '.claude', 'skills'));
   const skills = roots.flatMap((base) => {
     let names = [];
     try { names = fs.readdirSync(base).sort(); } catch { /* no skills here */ }
@@ -251,19 +274,20 @@ function sharedCandidates(skill, { home, cwd, env = process.env, dir } = {}) {
   if (!own) return [];
   const read = (d) => referencedFolders(fs.readFileSync(path.join(d, 'SKILL.md'), 'utf8'), homeDir);
 
-  const claude = path.join(homeDir, '.claude');
   const under = (p, base) => p === base || p.startsWith(`${base}/`);
-  const never = [own, ...roots, path.join(claude, 'plugins'), path.join(claude, 'self-improvement'), dataDir({ ...env, HOME: homeDir })];
-  const tooBroad = new Set(['/', homeDir, claude]);
-  const mine = [...read(own)].filter((f) => !tooBroad.has(f) && !never.some((base) => under(f, base)));
+  const shown = (f) => (under(f, homeDir) ? `~${f.slice(homeDir.length)}` : f);
+  const claudes = bases.map((r) => path.join(r, '.claude'));
+  const never = [own, ...roots, path.join(homeDir, '.claude', 'self-improvement'), dataDir({ ...env, HOME: homeDir }),
+    ...claudes.flatMap((c) => CONFIG_FOLDERS.map((name) => path.join(c, name)))];
+  const tooBroad = new Set(['/', homeDir, ...claudes]);
+  const safe = (f) => !tooBroad.has(f) && !never.some((base) => under(f, base)) && !SECRET_LIKE.test(shown(f));
+  const mine = [...read(own)].filter(safe);
 
   const others = new Set();
   for (const d of skills.filter((d) => path.resolve(d) !== own)) {
     try { read(d).forEach((f) => others.add(f)); } catch { /* unreadable skill */ }
   }
-  return mine.filter((f) => others.has(f))
-    .map((f) => (under(f, homeDir) ? `~${f.slice(homeDir.length)}` : f))
-    .sort();
+  return mine.filter((f) => others.has(f)).map(shown).sort();
 }
 
 function rubricOf(text) {
