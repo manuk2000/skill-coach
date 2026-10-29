@@ -368,6 +368,17 @@ test('a run inside a subagent is read from its own transcript', () => {
   assert.equal(main('tool', event, s.env, NOW).output, null);
 });
 
+test('run-end skips a newer unconnected run and notes the connected one', () => {
+  const s = setup();
+  const event = endScenario(s, { main: runWith('fetch_records', kb(50)) });
+  // A helper skill the connected run called afterwards: a newer row of the same session, not connected.
+  fs.appendFileSync(s.ledger, JSON.stringify({ type: 'run', session: SESSION, transcript: path.join(s.home, `${SESSION}.jsonl`), cwd: s.project, skill: 'helper-skill', n: 1 }) + '\n');
+  const r = main('tool', event, s.env, NOW);
+  assert.equal(noteOf(r).additionalContext, note('largest result 50 KB from fetch_records (main)'));
+  assert.equal(endedRun(s.ledger, SESSION, undefined, (row) => row.skill === 'helper-skill').skill, 'helper-skill');
+  assert.equal(endedRun(s.ledger, SESSION, undefined, () => false), null);
+});
+
 test('a run-end outside a subagent ignores the subagent rows', () => {
   const s = setup();
   const event = endScenario(s, { main: SMALL });

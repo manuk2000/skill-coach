@@ -106,8 +106,8 @@ function largeResultKb(dir, skill) {
 }
 
 // The run that is ending: the newest run row of this session and agent (a row with no
-// agent when the event has none) that is not skill-coach's own.
-function endedRun(ledgerPath, session, agent) {
+// agent when the event has none) that is not skill-coach's own and that `isWanted` accepts.
+function endedRun(ledgerPath, session, agent, isWanted = () => true) {
   if (!session) return null;
   let text;
   try {
@@ -127,6 +127,7 @@ function endedRun(ledgerPath, session, agent) {
     if (!row || row.type !== 'run' || row.session !== session) continue;
     if (agent ? row.agent !== agent : row.agent) continue;
     if (typeof row.skill !== 'string' || row.skill.startsWith('skill-coach:')) continue;
+    if (!isWanted(row)) continue;
     return row;
   }
   return null;
@@ -152,9 +153,10 @@ function costNote(skill, facts, limitKb) {
 // Reads the transcript of the run that run-end is about to score. Any trouble means no note.
 function runEndNote(event, ledger, dir, cwd, home) {
   try {
-    const row = endedRun(ledger, event.session_id, event.agent_id);
+    // Newer rows of unconnected skills (a helper the run called) are passed over.
+    const connected = (r) => isConnected(r.skill, r.cwd, home) || isConnected(r.skill, cwd, home);
+    const row = endedRun(ledger, event.session_id, event.agent_id, connected);
     if (!row || !row.transcript) return null;
-    if (!isConnected(row.skill, row.cwd, home) && !isConnected(row.skill, cwd, home)) return null;
     const lines = fs.readFileSync(row.transcript, 'utf8').split('\n');
     const facts = readRun(lines, row.skill, { readSubagent: subagentReader(row.transcript) });
     return facts.found ? costNote(row.skill, facts, largeResultKb(dir, row.skill)) : null;
