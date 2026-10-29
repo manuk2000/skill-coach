@@ -73,11 +73,13 @@ function pointerSpan(lines) {
 }
 
 // The edit that replaces an out-of-date pointer sentence; null when it is current or not ours to guess.
+// A section that never mentions run-end was written by hand, so its sentence is left alone.
 function pointerEdit(text, lines, eol) {
   const span = pointerSpan(lines);
   if (!span) return null;
   const old = lines.slice(span.from, span.to + 1);
   if (old.join(eol) === POINTER.join(eol)) return null;
+  if (!old.some((l) => l.includes('skill-coach:run-end'))) return null;
   // Anchor on the sentence alone; if the same text is quoted elsewhere, take the heading with it.
   for (const start of [span.from, span.heading]) {
     const oldString = lines.slice(start, span.to + 1).join(eol);

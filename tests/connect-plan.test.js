@@ -251,6 +251,18 @@ test('a hand-connected section without the closing line is left alone', () => {
   assert.equal(planConnect(PLAIN.replace('---\n\n# Demo', 'skill-coach:\n  rubric: RUBRIC.md\n---\n\n# Demo'), {}).state, 'connected', 'no section at all is also left alone');
 });
 
+test('a hand-written section without run-end is not rewritten', () => {
+  const text = PLAIN.replace('---\n\n# Demo', 'skill-coach:\n  rubric: RUBRIC.md\n---\n\n# Demo')
+    + '\n## Self-improvement\n\nWhen the run ends, write the notes to the usual file.\nThe rules for it are kept elsewhere, not here.\n\n## Later\n\nKeep me.\n';
+  const plan = planConnect(text, {});
+  assert.equal(plan.state, 'connected');
+  assert.deepEqual(plan.edits, []);
+  const withFamily = planConnect(text, { shared: '~/.claude/demo-shared' });
+  assert.equal(withFamily.state, 'upgrade');
+  assert.equal(withFamily.edits.length, 1, 'only the shared line is planned, never the pointer');
+  assert.ok(withFamily.edits[0].new_string.includes('shared: ~/.claude/demo-shared'));
+});
+
 test('an upgrade finds the pointer when the same sentence is quoted elsewhere', () => {
   const text = `${OLD_CONNECTED}\n\`\`\`markdown\n${OLD_POINTER}\n\`\`\`\n`;
   const plan = planConnect(text, {});

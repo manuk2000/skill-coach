@@ -65,9 +65,10 @@ the user gave one).
 ## Family
 
 `shared_candidates` lists folders this skill reads that at least one other skill reads
-too — a skill that has a family keeps one set of notes with the others. Decide it once,
-now, and pass the answer as `--shared '<folder>'` (single quotes, so `~` stays as
-written) on every `<plan>` run from here on.
+too. Notes stay per skill: the judge reads every member's notes, and facts that two or
+more members use live once, in the shared folder. Decide it once, now, and pass the
+answer as `--shared '<folder>'` (single quotes, so `~` stays as written) on every
+`<plan>` run from here on.
 
 - **None** → no family; show no line and pass no `--shared`.
 - **Exactly one** → decided, never asked. Show it as one line under *"Decided from your
