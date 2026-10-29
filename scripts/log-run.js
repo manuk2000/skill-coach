@@ -6,8 +6,9 @@
 //   node log-run.js typed   — UserPromptSubmit (only prompts starting with "/")
 // It must never get in the way of a skill: it always exits 0, and prints only a short
 // note for a connected skill (which run this is, plus a spot check every 10th run).
-// When skill-coach:run-end starts it also reads the run that is ending, and prints a
-// cost note if that run (or one of its subagents) received a very large tool result.
+// When skill-coach:run-end starts it also reads the run that is ending (the skill named in
+// the call's args, else the newest connected run), and prints a cost note if that run (or
+// one of its subagents) received a very large tool result.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -90,19 +91,30 @@ function countRuns(ledgerPath, skill) {
   return n;
 }
 
-// The size, in KB, from which one tool result starts a cost check: the skill's own
-// setting, else the default for all skills, else 40.
-function largeResultKb(dir, skill) {
+// A setting for one skill from config.json: its own entry, else the defaults; undefined
+// when neither has a value that `valid` accepts or the file cannot be read.
+function setting(dir, skill, key, valid) {
   try {
     const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8'));
     const own = config.skills && config.skills[skill];
-    for (const value of [own && own.large_result_kb, config.defaults && config.defaults.large_result_kb]) {
-      if (Number.isFinite(value) && value > 0) return value;
-    }
+    return [own && own[key], config.defaults && config.defaults[key]].find(valid);
   } catch {
-    // No readable config: use the default.
+    return undefined;
   }
-  return DEFAULT_LARGE_RESULT_KB;
+}
+
+// The size, in KB, from which one tool result starts a cost check: the skill's own
+// setting, else the default for all skills, else 40.
+function largeResultKb(dir, skill) {
+  const value = setting(dir, skill, 'large_result_kb', (v) => Number.isFinite(v) && v > 0);
+  return value === undefined ? DEFAULT_LARGE_RESULT_KB : value;
+}
+
+// The tools whose results never start a cost check for this skill (the judge adds a tool
+// here when it rules its large result unavoidable).
+function largeResultIgnore(dir, skill) {
+  const list = setting(dir, skill, 'large_result_ignore', Array.isArray);
+  return list ? list.filter((t) => typeof t === 'string' && t) : [];
 }
 
 // The run that is ending: the newest run row of this session and agent (a row with no
@@ -150,15 +162,27 @@ function costNote(skill, facts, limitKb) {
   return null;
 }
 
+// The skill run-end was told it is ending: the first word of the Skill call's args.
+function namedSkill(event) {
+  const args = event.tool_input && event.tool_input.args;
+  const first = typeof args === 'string' ? args.trim().split(/\s+/)[0].replace(/^\//, '') : '';
+  return first || null;
+}
+
 // Reads the transcript of the run that run-end is about to score. Any trouble means no note.
 function runEndNote(event, ledger, dir, cwd, home) {
   try {
-    // Newer rows of unconnected skills (a helper the run called) are passed over.
+    // The skill named in the args first; else the newest connected run, passing over newer
+    // rows of unconnected skills (a helper the run called).
+    const named = namedSkill(event);
     const connected = (r) => isConnected(r.skill, r.cwd, home) || isConnected(r.skill, cwd, home);
-    const row = endedRun(ledger, event.session_id, event.agent_id, connected);
+    const row = (named && endedRun(ledger, event.session_id, event.agent_id, (r) => r.skill === named))
+      || endedRun(ledger, event.session_id, event.agent_id, connected);
     if (!row || !row.transcript) return null;
     const lines = fs.readFileSync(row.transcript, 'utf8').split('\n');
-    const facts = readRun(lines, row.skill, { readSubagent: subagentReader(row.transcript) });
+    const facts = readRun(lines, row.skill, {
+      readSubagent: subagentReader(row.transcript), ignoreTools: largeResultIgnore(dir, row.skill),
+    });
     return facts.found ? costNote(row.skill, facts, largeResultKb(dir, row.skill)) : null;
   } catch {
     return null;
@@ -234,4 +258,6 @@ if (require.main === module) {
   });
 }
 
-module.exports = { dataDir, skillFromEvent, frontmatter, isConnected, countRuns, largeResultKb, endedRun, costNote, main };
+module.exports = {
+  dataDir, skillFromEvent, frontmatter, isConnected, countRuns, largeResultKb, largeResultIgnore, endedRun, costNote, main,
+};

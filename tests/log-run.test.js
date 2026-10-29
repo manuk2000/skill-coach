@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { main, isConnected, countRuns, dataDir, largeResultKb, endedRun, costNote } = require('../scripts/log-run.js');
+const { main, isConnected, countRuns, dataDir, largeResultKb, largeResultIgnore, endedRun, costNote } = require('../scripts/log-run.js');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'log-run.js');
 const FIX = path.join(__dirname, 'fixtures');
@@ -326,11 +326,54 @@ test('a 45 KB result inside a subagent prints the subagent note', () => {
   assert.equal(noteOf(r).additionalContext, note('largest result 45 KB from fetch_records (subagent)'));
 });
 
-test('an over-limit error prints the size-limit note', () => {
+// The shape Claude Code writes for an over-limit result: no is_error, saved to a file, about 1 KB.
+const SAVED = 'Error: result (94,299 characters across 1,017 lines) exceeds maximum allowed tokens. Output has been saved to /tmp/x.txt';
+const savedRun = (tool) => [skillStart(), toolResultOf('s1', 'loaded'), toolUse('b1', tool),
+  entry('user', [{ type: 'tool_result', tool_use_id: 'b1', content: [{ type: 'text', text: SAVED }] }])];
+
+test('an over-limit result saved to a file prints its real size', () => {
+  const s = setup();
+  const r = main('tool', endScenario(s, { main: savedRun('fetch_records') }), s.env, NOW);
+  assert.equal(noteOf(r).additionalContext, note('largest result 92 KB from fetch_records (main)'));
+});
+
+test('an over-limit error without a size prints the size-limit note', () => {
   const s = setup();
   const error = 'File content (31000 tokens) exceeds maximum allowed tokens (25000). Use offset and limit.';
   const r = main('tool', endScenario(s, { main: runWith('Read', error, true) }), s.env, NOW);
   assert.equal(noteOf(r).additionalContext, note("a result was over the tool's size limit (main)"));
+});
+
+test('an over-limit result inside a subagent prints the subagent note', () => {
+  const s = setup();
+  const main1 = [skillStart(), toolResultOf('s1', 'loaded'), toolUse('ag1', 'Agent', { description: 'fetch' }),
+    { ...toolResultOf('ag1', 'report'), toolUseResult: { agentId: AGENT, resolvedModel: 'm' } }];
+  const r = main('tool', endScenario(s, { main: main1, sub: savedRun('fetch_records').slice(2) }), s.env, NOW);
+  assert.equal(noteOf(r).additionalContext, note('largest result 92 KB from fetch_records (subagent)'));
+});
+
+test('largeResultIgnore reads the skill, then defaults, then none', () => {
+  const s = setup();
+  const dir = s.env.SKILL_COACH_DATA;
+  assert.deepEqual(largeResultIgnore(dir, 'demo-skill'), []);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ defaults: { large_result_ignore: ['read_docs'] }, skills: { 'demo-skill': { large_result_ignore: ['fetch_records', 7] } } }));
+  assert.deepEqual(largeResultIgnore(dir, 'demo-skill'), ['fetch_records']);
+  assert.deepEqual(largeResultIgnore(dir, 'other-skill'), ['read_docs']);
+  fs.writeFileSync(path.join(dir, 'config.json'), '{broken');
+  assert.deepEqual(largeResultIgnore(dir, 'demo-skill'), []);
+});
+
+test('a tool on the ignore list never starts a cost check', () => {
+  const s = setup();
+  const sub = [toolUse('f1', 'fetch_records'), toolResultOf('f1', kb(60))];
+  const main1 = [...runWith('fetch_records', kb(50)), toolUse('ag1', 'Agent', { description: 'fetch' }),
+    { ...toolResultOf('ag1', 'report'), toolUseResult: { agentId: AGENT, resolvedModel: 'm' } },
+    toolUse('b2', 'fetch_records'), entry('user', [{ type: 'tool_result', tool_use_id: 'b2', content: SAVED }])];
+  const event = endScenario(s, { main: main1, sub });
+  assert.match(noteOf(main('tool', event, s.env, NOW)).additionalContext, /fetch_records \(main\)/);
+  fs.writeFileSync(path.join(s.env.SKILL_COACH_DATA, 'config.json'), JSON.stringify({ skills: { 'demo-skill': { large_result_ignore: ['fetch_records'] } } }));
+  assert.equal(main('tool', event, s.env, NOW).output, null);
 });
 
 test('small results print no cost note', () => {
@@ -377,6 +420,28 @@ test('run-end skips a newer unconnected run and notes the connected one', () => 
   assert.equal(noteOf(r).additionalContext, note('largest result 50 KB from fetch_records (main)'));
   assert.equal(endedRun(s.ledger, SESSION, undefined, (row) => row.skill === 'helper-skill').skill, 'helper-skill');
   assert.equal(endedRun(s.ledger, SESSION, undefined, () => false), null);
+});
+
+// A second connected skill that ran after demo-skill in the same session, with a small result.
+function addLaterRun(s, skill) {
+  const transcript = path.join(s.home, `${skill}.jsonl`);
+  const start = entry('assistant', [{ type: 'tool_use', id: 's9', name: 'Skill', input: { skill } }]);
+  fs.writeFileSync(transcript, [start, toolResultOf('s9', 'loaded'), toolUse('b9', 'Bash'), toolResultOf('b9', kb(2))].map((e) => JSON.stringify(e)).join('\n') + '\n');
+  s.writeSkill(s.home, skill, CONNECTED.replace('demo-skill', skill));
+  fs.appendFileSync(s.ledger, JSON.stringify({ type: 'run', session: SESSION, transcript, cwd: s.project, skill, via: 'tool', n: 1 }) + '\n');
+}
+const runEndWith = (event, args) => JSON.stringify({ ...JSON.parse(event), tool_input: { skill: 'skill-coach:run-end', args } });
+
+test('run-end names the ended skill in its args, and the hook reads that run', () => {
+  const s = setup();
+  const event = endScenario(s, { main: runWith('fetch_records', kb(50)) });
+  addLaterRun(s, 'demo-b');
+  assert.equal(main('tool', event, s.env, NOW).output, null, 'without args the newest connected run (demo-b) is read');
+  const named = main('tool', runEndWith(event, 'demo-skill'), s.env, NOW);
+  assert.equal(noteOf(named).additionalContext, note('largest result 50 KB from fetch_records (main)'));
+  assert.equal(noteOf(main('tool', runEndWith(event, ' /demo-skill  more words'), s.env, NOW)).additionalContext,
+    note('largest result 50 KB from fetch_records (main)'), 'the first word counts, a leading slash is dropped');
+  assert.equal(main('tool', runEndWith(event, 'unknown-skill'), s.env, NOW).output, null, 'a name with no run falls back to the newest connected run');
 });
 
 test('a run-end outside a subagent ignores the subagent rows', () => {
