@@ -61,7 +61,7 @@ test('keeps the final answer and the subagent call', () => {
   assert.equal(f.final_answer, 'Here is the final answer.');
   assert.deepEqual(f.subagents, [{
     type: 'demo-agent', description: 'look around', model_requested: null, model_used: null, agent_id: null,
-    async: false, tokens: null, largest_kb: null, largest_tool: null, returned_kb: 0,
+    async: false, tokens: null, largest_kb: null, largest_tool: null, total_kb: null, returned_kb: 0,
   }]);
 });
 
@@ -232,15 +232,84 @@ test('images never count toward result size', () => {
   assert.equal(r.results.total_kb, 0);
 });
 
+// The shape Claude Code writes for an over-limit result: not flagged as an error, saved to a file.
+const SAVED = 'Error: result (94,299 characters across 1,017 lines) exceeds maximum allowed tokens. Output has been saved to /tmp/x.txt';
+const unflagged = (ts, id, text) => userLine(ts, [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }] }]);
+
 test('an over-limit result is counted, not blamed', () => {
+  const r = readRun([
+    SKILL_START('i0'), toolResult('i1', 's1', 'loaded'),
+    assistantTool('i2', 'f1', 'fetch_records', {}),
+    unflagged('i3', 'f1', SAVED),
+  ], 'demo-skill');
+  assert.equal(r.results.oversize_errors, 1);
+  assert.equal(r.tool_errors.length, 0);
+  assert.equal(r.excluded_errors, 0, 'not an error, so not an excluded error');
+});
+
+test('an over-limit result saved to a file is measured by its real size', () => {
+  const r = readRun([
+    SKILL_START('i0'), toolResult('i1', 's1', 'loaded'),
+    assistantTool('i2', 'b1', 'Bash', {}), toolResult('i3', 'b1', 'y'.repeat(2 * 1024)),
+    assistantTool('i4', 'f1', 'fetch_records', {}),
+    unflagged('i5', 'f1', SAVED),
+  ], 'demo-skill');
+  assert.deepEqual(r.results.largest[0], { tool: 'fetch_records', kb: 92.1 });
+  assert.equal(r.results.count, 2);
+});
+
+test('a file that only quotes the over-limit phrase is not over the limit', () => {
+  const quoted = `${'// a script that lists the errors it ignores\n'.repeat(10)}const EXCLUDED = [/exceeds maximum allowed tokens/];\n`;
+  const r = readRun([
+    SKILL_START('i0'), toolResult('i1', 's1', 'loaded'),
+    assistantTool('i2', 'r1', 'Read', {}), toolResult('i3', 'r1', quoted),
+  ], 'demo-skill');
+  assert.equal(r.results.oversize_errors, 0);
+});
+
+test('a flagged over-limit error counts once, and is excluded', () => {
   const r = readRun([
     SKILL_START('i0'), toolResult('i1', 's1', 'loaded'),
     assistantTool('i2', 'r1', 'Read', {}),
     toolResult('i3', 'r1', 'File content (31000 tokens) exceeds maximum allowed tokens (25000). Use offset and limit.', true),
   ], 'demo-skill');
   assert.equal(r.results.oversize_errors, 1);
-  assert.equal(r.tool_errors.length, 0);
   assert.equal(r.excluded_errors, 1);
+  assert.equal(r.tool_errors.length, 0);
+});
+
+test('Skill and ToolSearch results never count', () => {
+  const r = readRun([
+    SKILL_START('v0'), toolResult('v1', 's1', 'loaded'),
+    assistantTool('v2', 't1', 'ToolSearch', {}), toolResult('v3', 't1', 'd'.repeat(60 * 1024)),
+    assistantTool('v4', 'k1', 'Skill', { skill: 'other-skill' }), toolResult('v5', 'k1', 'd'.repeat(60 * 1024)),
+    assistantTool('v6', 't2', 'ToolSearch', {}), unflagged('v7', 't2', SAVED),
+    assistantTool('v8', 'b1', 'Bash', {}), toolResult('v9', 'b1', 'y'.repeat(2 * 1024)),
+  ], 'demo-skill');
+  assert.equal(r.results.count, 1);
+  assert.deepEqual(r.results.largest, [{ tool: 'Bash', kb: 2 }]);
+  assert.equal(r.results.oversize_errors, 0);
+});
+
+test('ignored tools are left out of the main run and its subagents', () => {
+  const lines = [
+    ...agentRun({}, { agentId: 'a1', resolvedModel: 'm' }),
+    assistantTool('w0', 'd1', 'read_docs', {}), toolResult('w1', 'd1', 'd'.repeat(60 * 1024)),
+    assistantTool('w2', 'd2', 'read_docs', {}), unflagged('w3', 'd2', SAVED),
+    assistantTool('w4', 'b1', 'Bash', {}), toolResult('w5', 'b1', 'y'.repeat(2 * 1024)),
+  ];
+  const readSubagent = () => [
+    assistantTool('x0', 'f1', 'read_docs', {}), toolResult('x1', 'f1', 'd'.repeat(70 * 1024)),
+    assistantTool('x2', 'f2', 'fetch_records', {}), toolResult('x3', 'f2', 'd'.repeat(3 * 1024)),
+  ];
+  const r = readRun(lines, 'demo-skill', { readSubagent, ignoreTools: ['read_docs'] });
+  assert.equal(r.results.largest[0].tool, 'Bash');
+  assert.equal(r.results.oversize_errors, 0);
+  assert.equal(r.subagents[0].largest_tool, 'fetch_records');
+  assert.equal(r.subagents[0].total_kb, 3);
+  const all = readRun(lines, 'demo-skill', { readSubagent });
+  assert.equal(all.results.largest[0].tool, 'read_docs', 'without the option every tool counts');
+  assert.equal(all.subagents[0].largest_tool, 'read_docs');
 });
 
 test('results and tokens stop at the run-end call', () => {
@@ -304,6 +373,26 @@ test('a typed command starts the run with its own text', () => {
   assert.ok(!r.started_by.includes('earlier'));
 });
 
+test('a typed command whose tags start with command-message is read the same way', () => {
+  const r = readRun([
+    userLine('p0', 'an unrelated earlier message'),
+    userLine('p1', '<command-message>demo-skill</command-message>\n<command-name>/demo-skill</command-name>\n<command-args>last week</command-args>'),
+    assistantText('p2', 'typed answer'),
+    userLine('p3', 'looks good'),
+  ], 'demo-skill');
+  assert.equal(r.started_by, '/demo-skill last week');
+  assert.deepEqual(r.user_messages, [{ text: 'looks good', likely_correction: false }]);
+});
+
+test('a typed command before a Skill-tool start gives its text, not its tags', () => {
+  const r = readRun([
+    userLine('p0', 'an older question'),
+    userLine('p1', '<command-message>other-command</command-message>\n<command-name>/other-command</command-name>\n<command-args>check the export</command-args>'),
+    SKILL_START('p2'),
+  ], 'demo-skill');
+  assert.equal(r.started_by, '/other-command check the export');
+});
+
 test('a run that is not found has empty result and token facts', () => {
   const r = readRun([userLine('q0', 'hello')], 'demo-skill');
   assert.deepEqual(r.results, { count: 0, total_kb: 0, largest: [], oversize_errors: 0 });
@@ -362,7 +451,35 @@ test('a subagent transcript gives tokens and its largest result', () => {
   assert.deepEqual(asked, ['a1']);
   assert.equal(r.subagents[0].largest_kb, 45);
   assert.equal(r.subagents[0].largest_tool, 'fetch_records');
+  assert.equal(r.subagents[0].total_kb, 45);
   assert.deepEqual(r.subagents[0].tokens, { input: 200, cache_creation: 20, cache_read: 2000, output: 10 });
+});
+
+test('a subagent that read many small files has a large total', () => {
+  const readSubagent = () => Array.from({ length: 30 }, (_, i) => [
+    assistantTool(`r${i}a`, `f${i}`, 'Read', {}), toolResult(`r${i}b`, `f${i}`, 'd'.repeat(5 * 1024)),
+  ]).flat();
+  const r = readRun(agentRun({}, { agentId: 'a1', resolvedModel: 'm' }), 'demo-skill', { readSubagent });
+  assert.equal(r.subagents[0].largest_kb, 5);
+  assert.equal(r.subagents[0].total_kb, 150);
+});
+
+test('a subagent with no tool calls has a total of 0', () => {
+  const readSubagent = () => [assistantMessage('z0', 'sm1', [{ type: 'text', text: 'answered from the prompt' }])];
+  const r = readRun(agentRun({}, { agentId: 'a1', resolvedModel: 'm' }), 'demo-skill', { readSubagent });
+  assert.equal(r.subagents[0].largest_kb, 0);
+  assert.equal(r.subagents[0].total_kb, 0);
+});
+
+test('an over-limit result inside a subagent is measured by its real size', () => {
+  const readSubagent = () => [
+    assistantTool('x0', 'f1', 'fetch_records', {}), unflagged('x1', 'f1', SAVED),
+    assistantTool('x2', 'f2', 'Read', {}), toolResult('x3', 'f2', 'd'.repeat(8 * 1024)),
+  ];
+  const r = readRun(agentRun({}, { agentId: 'a1', resolvedModel: 'm' }), 'demo-skill', { readSubagent });
+  assert.equal(r.subagents[0].largest_kb, 92.1);
+  assert.equal(r.subagents[0].largest_tool, 'fetch_records');
+  assert.equal(r.subagents[0].total_kb, 100.1);
 });
 
 test('a background subagent has no returned size', () => {
@@ -381,6 +498,7 @@ test('a missing subagent transcript leaves nulls and never throws', () => {
     assert.equal(r.subagents[0].tokens, null);
     assert.equal(r.subagents[0].largest_kb, null);
     assert.equal(r.subagents[0].largest_tool, null);
+    assert.equal(r.subagents[0].total_kb, null);
   }
 });
 
@@ -388,7 +506,7 @@ test('a subagent call with no result yet keeps nulls', () => {
   const r = readRun([SKILL_START('u0'), assistantTool('u1', 'ag1', 'Agent', { description: 'fetch' })], 'demo-skill', { readSubagent: () => [] });
   assert.deepEqual(r.subagents[0], {
     type: 'general-purpose', description: 'fetch', model_requested: null, model_used: null, agent_id: null,
-    async: null, tokens: null, largest_kb: null, largest_tool: null, returned_kb: null,
+    async: null, tokens: null, largest_kb: null, largest_tool: null, total_kb: null, returned_kb: null,
   });
 });
 

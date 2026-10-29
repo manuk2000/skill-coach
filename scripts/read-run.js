@@ -12,7 +12,7 @@ const EXCLUDED = [/File has not been read yet/, /exceeds maximum allowed tokens/
   /not valid JSON/, /unexpected EOF while looking for matching/, /EISDIR|illegal operation on a directory/,
   /syntax error.*eval/, /hook error/];
 const REJECTION = "The user doesn't want to proceed";
-const SYSTEM_PREFIXES = ['<task-notification>', '<command-name>', '<local-command-stdout>', 'Caveat:'];
+const SYSTEM_PREFIXES = ['<task-notification>', '<command-name>', '<command-message>', '<local-command-stdout>', 'Caveat:'];
 const CORRECTIONS = [
   /^(no|nope)\b(?!\s+(problem|worries|thanks|need)\b)/i,
   /^(don't|do not)\b(?!\s+worry\b)/i,
@@ -24,7 +24,13 @@ const CORRECTIONS = [
 // skill-coach's own lines in an answer: the score footer, a setup report, the first-time question.
 const COACH_LINE = /^\s*(?:[🟢🟡🔴]\s*(?:\d|n\/a)|⚠️|n\/a ·|skill-coach: |\*?Auto-improvement of logic is on for)/u;
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
+// An over-limit result: flagged as an error or not, often saved to a file with its size in the text.
+// Claude Code puts the phrase in the first line; a file that merely quotes it has it later.
 const OVERSIZE = /exceeds maximum allowed tokens/;
+const OVERSIZE_HEAD = 300;
+const SAVED_SIZE = /result \(([\d,]+) characters/;
+// Loading a skill or a tool's schema is not the skill's work: these results never count.
+const UNCOUNTED_TOOLS = new Set(['Skill', 'ToolSearch']);
 const TOP_RESULTS = 3;
 
 const clip = (s, n) => (s.length > n ? s.slice(0, n) : s);
@@ -57,6 +63,20 @@ const toKb = (bytes) => Math.round((bytes / 1024) * 10) / 10;
 function resultKb(content) {
   return toKb(resultBytes(content));
 }
+
+// The size of one counted result and whether it was over the tool's limit. An over-limit
+// result saved to a file names its real size ("result (94,299 characters …"); that size counts.
+function measure(content) {
+  const bytes = resultBytes(content);
+  const text = textOf(content).slice(0, OVERSIZE_HEAD);
+  if (!OVERSIZE.test(text)) return { bytes, over: false };
+  const m = SAVED_SIZE.exec(text);
+  const saved = m ? Number(m[1].replace(/,/g, '')) : 0;
+  return { bytes: Math.max(bytes, saved), over: true };
+}
+
+// Whether a tool's results count toward the run's sizes.
+const counts = (tool, ignored) => !UNCOUNTED_TOOLS.has(tool) && !ignored.has(tool);
 
 function withoutCoachLines(text) {
   return text.split('\n').filter((l) => !COACH_LINE.test(l)).join('\n').trim();
@@ -126,13 +146,20 @@ function typedCommandText(raw) {
   return [part('command-name'), part('command-args')].filter(Boolean).join(' ');
 }
 
+// The text of a user line that is a typed command ("/name args"), or null for any other line.
+function typedText(entry) {
+  if (entry.type !== 'user' || toolResults(entry).length > 0) return null;
+  const raw = textOf(entry.message && entry.message.content);
+  return raw.includes('<command-name>') ? typedCommandText(raw) || null : null;
+}
+
 // What the user asked for before the run: the text of a typed command, or the last
-// genuine user message before a Skill-tool start.
+// genuine user message (or typed command) before a Skill-tool start.
 function startedBy(entries, start) {
   const first = entries[start];
-  if (first.type === 'user') return clip(typedCommandText(textOf(first.message && first.message.content)), 500) || null;
+  if (first.type === 'user') return clip(typedText(first) || '', 500) || null;
   for (let i = start - 1; i >= 0; i--) {
-    const text = genuineUserText(entries[i]);
+    const text = typedText(entries[i]) || genuineUserText(entries[i]);
     if (text !== null) return clip(text, 500);
   }
   return null;
@@ -151,14 +178,16 @@ function parseEntries(lines) {
   return entries;
 }
 
-// Tokens and the largest tool result of a subagent's own transcript, or null when it has no lines.
-function measureSubagent(lines) {
+// Tokens, the largest tool result and the total of all tool results of a subagent's own
+// transcript, or null when it has no lines.
+function measureSubagent(lines, ignored = new Set()) {
   const entries = parseEntries(lines);
   if (entries.length === 0) return null;
   const tokens = emptyTokens();
   const seen = new Set();
   const names = {};
   let largest = null;
+  let total = 0;
   for (const e of entries) {
     const content = e.message && e.message.content;
     if (e.type === 'assistant') {
@@ -166,12 +195,17 @@ function measureSubagent(lines) {
       if (Array.isArray(content)) content.forEach((x) => { if (x && x.type === 'tool_use') names[x.id] = x.name; });
     } else if (e.type === 'user') {
       for (const r of toolResults(e)) {
-        const bytes = resultBytes(r.content);
-        if (!largest || bytes > largest.bytes) largest = { tool: names[r.tool_use_id] || '', bytes };
+        const tool = names[r.tool_use_id] || '';
+        if (!counts(tool, ignored)) continue;
+        const { bytes } = measure(r.content);
+        total += bytes;
+        if (!largest || bytes > largest.bytes) largest = { tool, bytes };
       }
     }
   }
-  return { tokens, largest_kb: largest ? toKb(largest.bytes) : 0, largest_tool: largest ? largest.tool : null };
+  return {
+    tokens, largest_kb: largest ? toKb(largest.bytes) : 0, largest_tool: largest ? largest.tool : null, total_kb: toKb(total),
+  };
 }
 
 // Fills a subagent entry from its result line. `launch` is the line's top-level toolUseResult.
@@ -194,8 +228,10 @@ function emptyFacts(skill) {
 }
 
 // options.readSubagent(agentId) returns a subagent transcript's lines, or null when it has none.
+// options.ignoreTools names tools whose results are left out of every size, here and in subagents.
 function readRun(lines, skill, options = {}) {
   const entries = parseEntries(lines);
+  const ignored = new Set(Array.isArray(options.ignoreTools) ? options.ignoreTools : []);
 
   let start = -1;
   entries.forEach((e, i) => { if (startsRun(e, skill)) start = i; });
@@ -252,7 +288,7 @@ function readRun(lines, skill, options = {}) {
             facts.subagents.push({
               type: input.subagent_type || 'general-purpose', description: input.description || '',
               model_requested: input.model || null, model_used: null, agent_id: null, async: null,
-              tokens: null, largest_kb: null, largest_tool: null, returned_kb: null,
+              tokens: null, largest_kb: null, largest_tool: null, total_kb: null, returned_kb: null,
             });
           }
         } else if (item.type === 'text' && item.text) {
@@ -268,7 +304,11 @@ function readRun(lines, skill, options = {}) {
     if (results.length > 0) {
       for (const r of results) {
         const tool = toolNames[r.tool_use_id] || '';
-        if (!launcher || r.tool_use_id !== launcher.id) sizes.push({ tool, bytes: resultBytes(r.content) });
+        if ((!launcher || r.tool_use_id !== launcher.id) && counts(tool, ignored)) {
+          const { bytes, over } = measure(r.content);
+          sizes.push({ tool, bytes });
+          if (over) facts.results.oversize_errors += 1;
+        }
         // With several results in one line it is unclear which one toolUseResult describes.
         if (agentAt[r.tool_use_id] !== undefined) noteAgentResult(facts.subagents[agentAt[r.tool_use_id]], r, results.length === 1 ? e.toolUseResult : null);
         if (!r.is_error) continue;
@@ -278,7 +318,6 @@ function readRun(lines, skill, options = {}) {
           facts.rejections.push({ tool, text: clip(said ? said[1].trim() : '', 300) });
         } else if (EXCLUDED.some((p) => p.test(text))) {
           facts.excluded_errors += 1;
-          if (OVERSIZE.test(text)) facts.results.oversize_errors += 1;
         } else {
           facts.tool_errors.push({ tool, text: clip(text, 300) });
         }
@@ -307,7 +346,7 @@ function readRun(lines, skill, options = {}) {
       if (!sub.agent_id) continue;
       try {
         const subLines = options.readSubagent(sub.agent_id);
-        if (subLines) Object.assign(sub, measureSubagent(subLines));
+        if (subLines) Object.assign(sub, measureSubagent(subLines, ignored));
       } catch {
         // An unreadable subagent transcript leaves its numbers null.
       }
