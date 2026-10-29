@@ -70,15 +70,17 @@ skill gets scored. One command connects one skill:
 
 It reads the skill and drafts its scoring rules from what the skill itself says. It
 asks you only what it can't work out alone, usually nothing. You normally answer
-three cards, one at a time:
+two cards, one at a time:
 
 | Card | Question | Shown above it | Options |
 |---|---|---|---|
 | 1 | Save these rules for release-notes? | What it decided from your skill, each with a reason, and the draft rules | **Save them** · Stop here |
-| 2 | May skill-coach change the skill's steps and rules by itself? | Wording fixes are always automatic | **Yes, by itself** · No, ask me first |
-| 3 | Make these 2 changes to SKILL.md? | Both changes, before and after | **Yes, connect it** · No, stop here |
+| 2 | Make these 2 changes to SKILL.md? | Both changes, before and after | **Yes, connect it** · No, stop here |
 
-The suggested option is shown in bold.
+The suggested option is shown in bold. Auto-fix is turned on without asking: when a
+run goes wrong, skill-coach fixes the skill by itself and `/skill-coach:undo` reverses
+it. To have fixes wait for your approval instead, set `logic_auto` to `off` (see
+Settings).
 
 - Type a change on any card instead of picking an option, and it is taken into
   account.

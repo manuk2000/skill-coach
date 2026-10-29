@@ -3,8 +3,8 @@ name: connect
 description: >
   Connect one of the user's own skills to skill-coach in one guided pass: write its
   rules file (references/rubric.md) with the rubric-builder, asking the user only
-  what it cannot decide, one question at a time in plain words, ask the one-time
-  logic question, show the
+  what it cannot decide, one question at a time in plain words, turn auto-fix on
+  without asking, show the
   two exact edits to its SKILL.md, apply them on a yes, log them so
   /skill-coach:undo can reverse the connect, and confirm. Use when the user runs
   /skill-coach:connect, or asks to connect, hook up or wire a skill to skill-coach.
@@ -25,7 +25,7 @@ leaves them in place.
 ## How to ask
 
 Every question in this skill — picking the skill, the rubric-builder's questions,
-saving the rules, the auto-fix setting, the final yes — is asked the same way:
+saving the rules, the final yes — is asked the same way:
 
 - **Only real choices.** Ask only what you cannot decide yourself: a preference that
   only the user has, or a yes before something is written. What the skill's own
@@ -91,16 +91,14 @@ The hand-over line is the rubric-builder's `Hand over:` line as it is. Only when
 asked the evidence question: `Nothing extra` → `Hand over: —`; a typed answer →
 `Hand over: <the user's words>`.
 
-## 3. The one question
+## 3. Auto-fix
 
-If `<data_dir>/config.json` has no `logic_auto` for this skill, ask: *"Small wording
-fixes are always made by themselves. When a run of `<skill>` goes wrong, may
-skill-coach also change the skill's steps and rules by itself?"* — header `Auto-fix`;
-options `Yes, by itself (Recommended)`: the fix is made and logged,
-`/skill-coach:undo` reverses it → `on`; `No, ask me first`: the fix waits until you
-approve it in `/skill-coach:analyze` → `off`. An unclear answer means `on`. Add the
-key `"logic_auto": "on" | "off"` to the skill's entry under `skills` with the Edit
-tool, keeping any other keys that entry already has.
+Do not ask it — the user's standing answer is yes. If `<data_dir>/config.json` has
+no `logic_auto` for this skill, add `"logic_auto"` set to `defaults.logic_auto`
+(`on` unless the user changed the default) to the skill's entry under `skills` with
+the Edit tool, keeping any other keys that entry already has. Say it in one line:
+*"Auto-fix is on: when a run goes wrong, skill-coach fixes the skill by itself and
+`/skill-coach:undo` reverses it."* A value the skill already has is kept.
 Create the file as
 `{"defaults":{"text_auto":"on","logic_auto":"on","score_after_run":"on"},"skills":{}}`
 first if it does not exist.

@@ -26,9 +26,9 @@ A clean run prints nothing and costs almost nothing.
    /plugin install skill-coach@skill-coach
    ```
 
-2. **Connect one of your skills.** You normally answer three cards: save the rules it
-   drafted from your skill, allow fixes by itself or not, and confirm the two changes
-   to the skill's `SKILL.md`.
+2. **Connect one of your skills.** You normally answer two cards: save the rules it
+   drafted from your skill, and confirm the two changes to the skill's `SKILL.md`.
+   Auto-fix is on from the start; `/skill-coach:undo` reverses any change.
 
    ```
    /skill-coach:connect release-notes

@@ -78,6 +78,13 @@ Call the subagent `skill-coach:judge` in the foreground. Pass, as a list:
 
 Take the last fenced `json` block of its answer as `decision`.
 
+If you think the judge is wrong that something was shown, check before you dispute it:
+run `node <plugin_root>/scripts/read-run.js --transcript <transcript_path> --skill <skill>`.
+Its `final_answer` holds every text block of the run, text written before a tool call
+included; thinking never reaches the user. Your memory of what you printed is not
+evidence, and a disputed decision still goes to the worker unless that output shows
+the judge missed the text.
+
 ## 6. Worker
 
 Call the subagent `skill-coach:worker` in the foreground. Pass `plugin_root`,

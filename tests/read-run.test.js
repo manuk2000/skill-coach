@@ -166,6 +166,20 @@ test("skill-coach's own lines after the call are not part of the answer", () => 
   assert.deepEqual(r.subagents, []);
 });
 
+test('text written before a tool call is in the answer; thinking is not', () => {
+  // Claude Code stores each block of one response on its own line, so the text before a
+  // tool call is a line of its own. Thinking blocks are never shown to the user.
+  const thinking = JSON.stringify({ type: 'assistant', timestamp: 'e2', message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'race: idea miss(0) → winner rg' }] } });
+  const r = readRun([
+    assistantTool('e0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('e1', 's1', 'loaded'),
+    thinking,
+    assistantText('e3', 'race: idea unavailable(0) · rg hit(3) → winner rg, verified yes'),
+    assistantTool('e4', 'b1', 'Bash', { command: 'printf row >> log.md' }), toolResult('e5', 'b1', 'ok'),
+    assistantText('e6', 'Logged.'),
+  ], 'demo-skill');
+  assert.equal(r.final_answer, 'race: idea unavailable(0) · rg hit(3) → winner rg, verified yes\n\nLogged.');
+});
+
 test('CLI prints facts for a readable transcript', () => {
   const r = spawnSync(process.execPath, [SCRIPT, '--transcript', FIXTURE, '--skill', 'demo-skill'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
