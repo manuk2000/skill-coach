@@ -73,7 +73,8 @@ skill gets scored. One command connects one skill:
 
 It reads the skill and drafts its scoring rules from what the skill itself says. It
 asks you only what it can't work out alone, usually nothing. You normally answer
-two cards, one at a time:
+two cards, one at a time, plus one about a [family](#skill-families) when the skill
+reads files in a folder that another skill reads too:
 
 | Card | Question | Shown above it | Options |
 |---|---|---|---|
@@ -92,9 +93,12 @@ Settings).
 - Skills that come from a plugin can't be connected; only your own skills can.
 - It also lists problems it noticed in the skill itself (a dead link, two rules that
   contradict). It reports them and never fixes them.
-- If the skill reads a folder that another skill reads too, the two can form a
-  [family](#skill-families). One folder is shown as already decided; two or more are
-  one extra question, with "No family" as an answer.
+- If the skill reads files in a folder that another skill reads too, the two can form
+  a [family](#skill-families). You are always asked, with "No family" as an answer,
+  and no answer is suggested: the folder is only a guess from paths the skills
+  mention. Your home folder, Claude Code's own folders (hooks, commands, agents,
+  skills, plugins and the like) and folders whose name suggests secrets are never
+  offered.
 - Run it again on a skill you connected earlier to bring it up to date. It replaces the
   old pointer sentence with the current one and can add the family line, in one card
   you confirm. Its rules, its `Hand over:` line and its auto-fix setting stay as they
@@ -117,9 +121,13 @@ Add this section anywhere in the skill:
 ## Self-improvement
 
 At the end of every run — and again if the user's next message corrects the
-result or asks to add something to the skill — invoke `skill-coach:run-end`.
-Settings live in the skill-coach data folder, not here.
+result or asks to add something to the skill — invoke `skill-coach:run-end`
+with this skill's name as its argument. Settings live in the skill-coach data
+folder, not here.
 ```
+
+Passing the skill's name tells skill-coach which run is ending when one skill calls
+another.
 
 Under that sentence you can add a line starting `Hand over:` that names extra evidence
 the judge should look at, such as a self-check the skill prints.
@@ -146,32 +154,42 @@ Only when one of these happened. Otherwise the run is just recorded.
 | A spot check | Every 10th run of a skill is scored even when nothing went wrong. |
 | You asked | `/skill-coach:analyze` scores this session's unscored runs. |
 
-A skill is scored at most once per session, apart from a request after the line (below).
+A skill is scored at most once per session, apart from a request (below): a run with a
+request is always scored, and a request after the line is scored on its own.
 If you correct a run that was already scored, the new score replaces the old one, and
 any second fix waits for your approval instead of being applied.
 
 **The cost check.** As a run ends, the hook measures the biggest tool result of the run
 and of its subagents. This costs nothing. At 40 KB of text or more (the
-`large_result_kb` setting), the run is scored. Images and documents never count, and a
-result the tool refused as too large does. The judge asks one question: *could the
-skill have fetched less?* It looks for a filter or limit at the source, a count or size
-probe before the full fetch, only the fields that were needed, the bulk handed to a
-subagent, or a copy that was already fetched. Fetching the same large payload twice
-costs more points. A fix changes the method in the skill's own step; it never just
-lowers a number. Nothing is taken off when you asked to see the whole payload. The
-score line shows the cost, see below.
+`large_result_kb` setting), the run is scored. Images and documents never count, and
+neither does loading a skill or a tool's schema. A result too large for the tool counts
+at its real size, also when Claude Code saved it to a file instead. The judge asks one
+question: *could the skill have fetched less?* It looks for a filter or limit at the
+source, a count or size probe before the full fetch, only the fields that were needed,
+the bulk handed to a subagent, or a copy that was already fetched. Fetching the same
+large payload twice costs more points. A fix changes the method in the skill's own
+step; it never just lowers a number. If this run never ran the narrower fetch, the fix
+waits for your approval, marked untested. Nothing is taken off when you asked to see
+the whole payload. The score line shows the cost, see below.
+
+Some large results can't be fetched smaller, such as a tool's own documentation. When
+the judge rules so, it adds the tool to the skill's `large_result_ignore` setting, and
+that tool no longer starts a cost check for the skill. The score line says so, and you
+can remove the tool from `config.json` again.
 
 **Requests.** Asking for something new is never marked down. The skill never claimed
 to do it, so the run is scored as usual. What happens next depends on the request:
 
 - **Lasting** when you said so (*"add"*, *"always"*, *"next time"*, *"from now on"*),
   or when it is one more of the things the skill exists for, such as a new kind of item
-  for a skill that keeps a list of them. It is added to the skill, written from the
-  steps of this run that worked (the query that returned data, the command that
-  exited clean). If the run never managed it, the addition is marked untested and waits
-  for your approval.
-- **One-off** when it was about this case only. It is noted. If the same request
-  comes a second time, it counts as lasting. When unsure, it counts as one-off.
+  for a skill that keeps a list of them. A message after the line that says *"add this
+  to the skill"* is always lasting. It is added to the skill, written from the steps
+  of this run that worked (the query that returned data, the command that exited
+  clean). If the run never managed it, the addition is marked untested and waits for
+  your approval.
+- **One-off** when it was about this case only (*"this time"*). It is noted. If the
+  same request comes a second time, it counts as lasting. When unsure, it counts as
+  one-off. This holds for a request in the message that started the run too.
 - **Outside the skill's purpose.** It is never added. The line says so in a few words.
 - **A correction comes first.** If you also corrected the run, the request waits
   and the correction is fixed. The request is picked up the next time it is seen.
@@ -207,6 +225,7 @@ The examples leave that figure out, except where it is the point.
 | `🟡 6/10 · 1 fix waiting (P-20261025-001)` | A fix needs your decision; see it in `/skill-coach:analyze`. |
 | `🟡 6/10 · largest 140 KB (fetch_records) · ~85k tokens` | The cost check fired. The biggest tool result was 140 KB, from `fetch_records`, and the run used about 85,000 tokens. Any fix follows, as in the rows above. |
 | `🟢 9/10 · ~12k tokens · Not added (outside the skill): posting the notes to chat` | You asked for something the skill is not meant to do. It was not added. |
+| `🟢 9/10 · largest 60 KB (read_docs) · ~30k tokens · read_docs no longer starts a cost check` | The large result could not have been smaller. That tool is now on the skill's `large_result_ignore` list. |
 | `🟢 9/10` | Scored, nothing to change. |
 | `⚠️ …` | Something in your setup is broken (a missing permission, a server that is down). It's reported, never "fixed" with a rule. |
 | `n/a · …` | The run never finished a piece of work, so it can't be scored. That is not a failure. |
@@ -221,9 +240,9 @@ as logic.
 |---|---|
 | Text, in the skill's own folder | Applied (setting `text_auto`, on by default) |
 | Logic, in the skill's own folder | Applied, or waits for you if you said "ask me first" (setting `logic_auto`) |
-| A fact the skills of a [family](#skill-families) share | Applied, written once in the family folder (setting `text_auto`) |
-| A rule in a family folder | Always waits for you. It would change every skill of the family at once. |
-| An addition the run never managed to do | Always waits for you, marked untested. |
+| A fact the skills of a [family](#skill-families) share | Applied, written once in a `.md` file of the family folder (setting `text_auto`) |
+| A rule in a family folder, or any file there that is not `.md` | Always waits for you. A rule would change every skill of the family at once. |
+| An addition, or a narrower fetch, the run never managed to do | Always waits for you, marked untested. |
 | The skill's scoring rules | Always waits for you. The judge never changes the rules it scores by. |
 | Anything outside the skill's folder | Always waits for you: a `CLAUDE.md`, memory, another skill. The family folder and the pointer lines below are the exception. |
 | The plugin's own files | Always waits for you. |
@@ -234,7 +253,9 @@ as logic.
 - It never deletes content and never changes a safety or permission rule. There is
   one exception: when a fact moves to a family folder, each exact copy of it in a
   skill is replaced by a one-line pointer, `see <file> — <section>`. That moves a fact
-  and changes no rule. Copies inside a code block or a quoted example stay.
+  and changes no rule. A copy that also states a rule (with a word such as *must*,
+  *never* or *only*) is handled as a logic change, under `logic_auto`. Copies inside a
+  code block or a quoted example stay.
 - It edits one section in place. It never appends a "lessons learned" list to the end
   of a skill.
 - A lesson from a single run is written down only when the run proves it: a passing
@@ -277,9 +298,11 @@ Some things to know:
   its own scores and problems.
 - The fact is applied under the scored skill's `text_auto`; when that is off, the fact
   and its pointers wait together in `proposals.md`. Otherwise each pointer is applied
-  under its own skill's `text_auto`, and a pointer whose skill has it off waits in
-  `proposals.md` while the rest of the change is applied.
-- A rule in the family folder always waits for you.
+  under its own skill's `text_auto` (`logic_auto` when the copy it replaces also states
+  a rule), and a pointer whose skill has it off waits in `proposals.md` while the rest
+  of the change is applied.
+- A rule in the family folder always waits for you. Only `.md` files in the family
+  folder are ever changed by themselves.
 - `/skill-coach:undo` reverts the whole change, every file, or none of them: if a file
   changed since, it restores nothing and shows you the backup folder.
 - Undo never deletes a file. A file the change created (the first `facts.md`) stays.
@@ -299,7 +322,7 @@ checks each subagent against this table, a spot check included:
 | Fetches it, then counts, filters or picks fields. No judgement. | `haiku` |
 | Groups it, compares it, reads a trace or stack and says what matters. | `sonnet` |
 | Decides, interprets, recommends. | No subagent. The main session does it. |
-| The data is small, under about 10 KB. | No subagent. Read it directly. |
+| The data is small, under about 10 KB of results in all. | No subagent. Read it directly. |
 
 A subagent that does not fit costs 2 points: too strong (a stronger model only fetched
 or counted), too weak (the main session had to redo or correct its work), or started
@@ -332,12 +355,13 @@ skills, and any skill can override it.
 | `logic_auto` | Step and rule fixes apply by themselves | `on`, asked once per skill |
 | `score_after_run` | Runs with trouble get scored at the end | `on` |
 | `large_result_kb` | The size in KB of text from which one tool result starts a cost check | `40` |
+| `large_result_ignore` | Tools whose results never start a cost check. The judge adds a tool when its large result could not have been smaller. | none |
 
 ```json
 {
   "defaults": { "text_auto": "on", "logic_auto": "on", "score_after_run": "on", "large_result_kb": 40 },
   "skills": {
-    "release-notes": { "logic_auto": "off", "large_result_kb": 80 }
+    "release-notes": { "logic_auto": "off", "large_result_kb": 80, "large_result_ignore": ["read_docs"] }
   }
 }
 ```
@@ -346,7 +370,8 @@ skills, and any skill can override it.
 
 The plugin never edits your settings. For changes to happen without a prompt, allow
 edits to your skills folder and the data folder, for example in your user
-`settings.json`:
+`settings.json`. If your skills form a [family](#skill-families), allow its folder too:
+Edit for the files a change edits, and Write for the files it creates there.
 
 ```json
 {
@@ -354,7 +379,9 @@ edits to your skills folder and the data folder, for example in your user
     "allow": [
       "Edit(~/.claude/skills/**)",
       "Write(~/.claude/self-improvement/**)",
-      "Edit(~/.claude/self-improvement/**)"
+      "Edit(~/.claude/self-improvement/**)",
+      "Edit(~/.claude/demo-shared/**)",
+      "Write(~/.claude/demo-shared/**)"
     ]
   }
 }
@@ -404,4 +431,5 @@ These changes always wait for your approval.
 
 **Will one lucky run rewrite my skill?**
 No. A single run only becomes a lesson when it proves it, and evidence older than the
-last fix for the same problem is ignored.
+last fix for the same problem is ignored. A fix that adds something the run never
+managed, or a narrower fetch it never ran, waits for your approval.

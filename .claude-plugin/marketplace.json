@@ -4,13 +4,13 @@
     "name": "Manuk Asatryan"
   },
   "metadata": {
-    "description": "Records every skill run, scores runs that had trouble, and improves your skills with undoable automatic changes."
+    "description": "Records every skill run, scores runs that had trouble, cost too much or asked for something new, and improves your skills with undoable automatic changes."
   },
   "plugins": [
     {
       "name": "skill-coach",
       "source": "./",
-      "description": "Records every skill run, scores runs that had trouble, and improves your skills with undoable automatic changes."
+      "description": "Records every skill run, scores runs that had trouble, cost too much or asked for something new, and improves your skills with undoable automatic changes."
     }
   ]
 }

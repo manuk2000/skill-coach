@@ -18,3 +18,10 @@ test('marketplace lists the plugin from its own root', () => {
   assert.equal(m.name, 'skill-coach');
   assert.deepEqual(m.plugins.map((x) => [x.name, x.source]), [['skill-coach', './']]);
 });
+
+test('the marketplace describes the plugin as plugin.json does', () => {
+  const p = readJson('.claude-plugin/plugin.json');
+  const m = readJson('.claude-plugin/marketplace.json');
+  assert.equal(m.metadata.description, p.description);
+  assert.deepEqual(m.plugins.map((x) => x.description), [p.description]);
+});
