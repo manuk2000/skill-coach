@@ -2,9 +2,10 @@
 name: run-end
 description: >
   Invoke at the end of every run of a skill connected to skill-coach (its SKILL.md
-  says so), and again when the user's next message corrects that run. Decides whether
-  the run is worth scoring, asks the one-time logic question, then calls the
-  skill-coach judge and worker and prints their one-line footer.
+  says so), and again when the user's next message corrects that run or asks to add
+  something to the skill. Decides whether the run is worth scoring, asks the one-time
+  logic question, then calls the skill-coach judge and worker and prints their
+  one-line footer.
 ---
 
 # run-end
@@ -18,8 +19,8 @@ Follow these steps in order. Most runs stop at step 3, which costs nothing.
 - `skill` = the connected skill that just ran. `skill_dir` = its folder.
 - `rubric_path` = `skill_dir` joined with the `rubric:` value under the skill's
   `skill-coach:` frontmatter block.
-- `hand_over` = the lines of the skill's `## Self-improvement` section after the
-  pointer sentence (may be empty).
+- `hand_over` = the lines of the skill's `## Self-improvement` section after the line
+  ending `not here.` (may be empty).
 
 ## 2. Find the run
 
@@ -45,10 +46,18 @@ of these happened:
 - the user corrected the result or rejected a tool call, including in their next
   message;
 - more than 20 tool calls were used;
+- part of what the user asked — the prompt that started the run included — had no
+  step in the skill and was improvised, or the user's next message asks to add
+  something to the skill;
+- the note *"skill-coach: cost check due for `<skill>`"* is there (the hook adds it as
+  run-end starts) — keep its text as `cost_note`;
 - a note *"skill-coach: spot check due for `<skill>`"* appeared during this run;
 - this call comes from `/skill-coach:analyze`.
 
-Set `reason` to `trouble`, `correction`, `spot-check` or `analyze` accordingly.
+Set `reason` to `analyze`, `correction`, `trouble` (an error, or more than 20 tool
+calls), `request`, `cost` or `spot-check` accordingly; when several apply, take the
+first in that order. `cost_note` is kept whatever the reason, and is `null` when there
+was no such note.
 
 Then skip, printing nothing, when:
 
@@ -56,8 +65,9 @@ Then skip, printing nothing, when:
   first, else `defaults`; missing means `on`) — unless `reason` is `analyze`; or
 - the skill was already scored automatically in this session: its notes file
   `<data_dir>/notes/<skill>.md` has a Scores row whose session column equals the
-  first 8 characters of `session_id`. A `correction` re-run of the same run is the
-  one exception — it replaces that scoring rather than adding a second one.
+  first 8 characters of `session_id`. There are two exceptions: a `correction`
+  re-run of the same run replaces that scoring rather than adding a second one, and a
+  `request` run is never skipped — it adds a new Scores row of its own.
 
 ## 4. First time for this skill
 
@@ -74,7 +84,7 @@ user later says to turn it off, Edit the entry to `"logic_auto": "off"`.
 
 Call the subagent `skill-coach:judge` in the foreground. Pass, as a list:
 `plugin_root`, `data_dir`, `skill`, `skill_dir`, `rubric_path`, `transcript_path`,
-`session_id`, `reason`, `hand_over`.
+`session_id`, `reason`, `cost_note` (or `null`), `hand_over`.
 
 Take the last fenced `json` block of its answer as `decision`.
 
@@ -90,14 +100,16 @@ the judge missed the text.
 Call the subagent `skill-coach:worker` in the foreground. Pass `plugin_root`,
 `data_dir`, `skill`, `skill_dir`, `rubric_path`, `session_id` and `decision`. On a
 `correction` re-run, also pass `replaces`: the fix id in this session's Scores row for
-the skill (`none` when that row has none).
+the skill (`none` when that row has none). A `request` run never passes `replaces`.
 
 ## 7. Footer
 
 Print the worker's one-line footer exactly as returned, then the first-time line from
 step 4 if there is one. Never invent or round a number.
 
-## 8. A correction after the footer
+## 8. A correction or a request after the footer
 
 If the user's next message corrects this run, invoke run-end again for the same run
-with `reason: correction`.
+with `reason: correction`. If it asks to add something to the skill ("add this to the
+skill", "do this every time"), invoke run-end again for the same run with
+`reason: request`.
