@@ -1,9 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { readRun, isLikelyCorrection, resultKb } = require('../scripts/read-run.js');
+const { readRun, isLikelyCorrection, resultKb, subagentReader } = require('../scripts/read-run.js');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'transcript-basic.jsonl');
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'read-run.js');
@@ -58,7 +59,10 @@ test('includes the next user message, flagged as a correction', () => {
 
 test('keeps the final answer and the subagent call', () => {
   assert.equal(f.final_answer, 'Here is the final answer.');
-  assert.deepEqual(f.subagents, [{ type: 'demo-agent', description: 'look around' }]);
+  assert.deepEqual(f.subagents, [{
+    type: 'demo-agent', description: 'look around', model_requested: null, model_used: null, agent_id: null,
+    async: false, tokens: null, largest_kb: null, largest_tool: null, returned_kb: 0,
+  }]);
 });
 
 test('tolerates a cut-off last line', () => assert.equal(f.found, true));
@@ -312,4 +316,102 @@ test('resultKb counts text bytes only, to one decimal', () => {
   assert.equal(resultKb([{ type: 'text', text: 'a' }, { type: 'text', text: 'é' }]), 0);
   assert.equal(resultKb([{ type: 'text', text: 'x'.repeat(2048) }, { type: 'image', source: { data: 'A'.repeat(9999) } }, { type: 'document', source: { data: 'B'.repeat(9999) } }]), 2);
   assert.equal(resultKb(undefined), 0);
+});
+
+// A tool_result line as Claude Code writes it: the launch details sit beside the message, not inside it.
+const agentResult = (ts, id, toolUseResult, content = 'report') => JSON.stringify({
+  type: 'user', timestamp: ts, toolUseResult, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content }] },
+});
+const agentRun = (input, toolUseResult, content) => [
+  SKILL_START('s0'), toolResult('s1', 's1', 'loaded'),
+  assistantTool('s2', 'ag1', 'Agent', { subagent_type: 'general-purpose', description: 'fetch', prompt: 'go', ...input }),
+  agentResult('s3', 'ag1', toolUseResult, content),
+];
+
+test('a subagent records the model asked for and the model used', () => {
+  const r = readRun(agentRun({ model: 'haiku' }, { agentId: 'a1', resolvedModel: 'claude-haiku-x' }), 'demo-skill');
+  assert.equal(r.subagents[0].model_requested, 'haiku');
+  assert.equal(r.subagents[0].model_used, 'claude-haiku-x');
+  assert.equal(r.subagents[0].agent_id, 'a1');
+});
+
+test('a subagent without a model asked for has null', () => {
+  const r = readRun(agentRun({}, { agentId: 'a1', resolvedModel: 'claude-big-x' }), 'demo-skill');
+  assert.equal(r.subagents[0].model_requested, null);
+  assert.equal(r.subagents[0].model_used, 'claude-big-x');
+});
+
+test('a foreground subagent records the size of its report', () => {
+  const r = readRun(agentRun({}, { agentId: 'a1' }, 'x'.repeat(3 * 1024)), 'demo-skill');
+  assert.equal(r.subagents[0].async, false);
+  assert.equal(r.subagents[0].returned_kb, 3);
+});
+
+test('a subagent transcript gives tokens and its largest result', () => {
+  const asked = [];
+  const readSubagent = (id) => {
+    asked.push(id);
+    return [
+      assistantMessage('x0', 'sm1', [{ type: 'tool_use', id: 'f1', name: 'fetch_records', input: {} }]),
+      toolResult('x1', 'f1', 'd'.repeat(45 * 1024)),
+      assistantMessage('x2', 'sm1', [{ type: 'text', text: 'same message, second block' }]),
+      assistantMessage('x3', 'sm2', [{ type: 'text', text: 'done' }]),
+    ];
+  };
+  const r = readRun(agentRun({}, { agentId: 'a1', resolvedModel: 'm' }), 'demo-skill', { readSubagent });
+  assert.deepEqual(asked, ['a1']);
+  assert.equal(r.subagents[0].largest_kb, 45);
+  assert.equal(r.subagents[0].largest_tool, 'fetch_records');
+  assert.deepEqual(r.subagents[0].tokens, { input: 200, cache_creation: 20, cache_read: 2000, output: 10 });
+});
+
+test('a background subagent has no returned size', () => {
+  const launch = { isAsync: true, status: 'async_launched', agentId: 'a2', resolvedModel: 'm' };
+  const r = readRun(agentRun({ run_in_background: true }, launch, 'Async agent launched. agentId: a2'), 'demo-skill');
+  assert.equal(r.subagents[0].async, true);
+  assert.equal(r.subagents[0].returned_kb, null);
+  assert.equal(r.subagents[0].model_used, 'm');
+  assert.equal(r.subagents[0].agent_id, 'a2');
+});
+
+test('a missing subagent transcript leaves nulls and never throws', () => {
+  const facts = { agentId: 'a1', resolvedModel: 'm' };
+  for (const readSubagent of [() => null, () => { throw new Error('gone'); }, undefined]) {
+    const r = readRun(agentRun({}, facts), 'demo-skill', { readSubagent });
+    assert.equal(r.subagents[0].tokens, null);
+    assert.equal(r.subagents[0].largest_kb, null);
+    assert.equal(r.subagents[0].largest_tool, null);
+  }
+});
+
+test('a subagent call with no result yet keeps nulls', () => {
+  const r = readRun([SKILL_START('u0'), assistantTool('u1', 'ag1', 'Agent', { description: 'fetch' })], 'demo-skill', { readSubagent: () => [] });
+  assert.deepEqual(r.subagents[0], {
+    type: 'general-purpose', description: 'fetch', model_requested: null, model_used: null, agent_id: null,
+    async: null, tokens: null, largest_kb: null, largest_tool: null, returned_kb: null,
+  });
+});
+
+test('subagentReader finds the file next to the session transcript', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-sub-'));
+  fs.mkdirSync(path.join(dir, 's1', 'subagents'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 's1.jsonl'), '');
+  fs.writeFileSync(path.join(dir, 's1', 'subagents', 'agent-a1.jsonl'), 'line one\nline two\n');
+  const read = subagentReader(path.join(dir, 's1.jsonl'));
+  assert.deepEqual(read('a1'), ['line one', 'line two', '']);
+  assert.equal(read('zzz'), null);
+  assert.equal(read('../../s1'), null);
+});
+
+test('CLI reads a subagent transcript next to the session transcript', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-sub-'));
+  fs.mkdirSync(path.join(dir, 'sess', 'subagents'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sess.jsonl'), agentRun({}, { agentId: 'a1' }).join('\n') + '\n');
+  fs.writeFileSync(path.join(dir, 'sess', 'subagents', 'agent-a1.jsonl'), [
+    assistantMessage('y0', 'sm1', [{ type: 'tool_use', id: 'f1', name: 'fetch_records', input: {} }]),
+    toolResult('y1', 'f1', 'd'.repeat(45 * 1024)),
+  ].join('\n') + '\n');
+  const r = spawnSync(process.execPath, [SCRIPT, '--transcript', path.join(dir, 'sess.jsonl'), '--skill', 'demo-skill'], { encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.equal(JSON.parse(r.stdout).subagents[0].largest_kb, 45);
 });

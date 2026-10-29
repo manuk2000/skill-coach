@@ -5,6 +5,7 @@
 // compact facts block for the judge. Read-only: prints JSON, writes nothing.
 
 const fs = require('node:fs');
+const path = require('node:path');
 
 // Errors raised by Claude Code itself, not by the skill being scored.
 const EXCLUDED = [/File has not been read yet/, /exceeds maximum allowed tokens/, /InputValidationError/,
@@ -137,16 +138,7 @@ function startedBy(entries, start) {
   return null;
 }
 
-function emptyFacts(skill) {
-  return {
-    skill, found: false, start_time: null, end_time: null, tool_calls: 0, tool_errors: [],
-    excluded_errors: 0, rejections: [], subagents: [], user_messages: [], final_answer: '',
-    results: { count: 0, total_kb: 0, largest: [], oversize_errors: 0 },
-    tokens: emptyTokens(), started_by: null,
-  };
-}
-
-function readRun(lines, skill) {
+function parseEntries(lines) {
   const entries = [];
   for (const line of lines) {
     try {
@@ -156,6 +148,54 @@ function readRun(lines, skill) {
       // A cut-off or malformed line, often the one still being written.
     }
   }
+  return entries;
+}
+
+// Tokens and the largest tool result of a subagent's own transcript, or null when it has no lines.
+function measureSubagent(lines) {
+  const entries = parseEntries(lines);
+  if (entries.length === 0) return null;
+  const tokens = emptyTokens();
+  const seen = new Set();
+  const names = {};
+  let largest = null;
+  for (const e of entries) {
+    const content = e.message && e.message.content;
+    if (e.type === 'assistant') {
+      addUsage(tokens, seen, e);
+      if (Array.isArray(content)) content.forEach((x) => { if (x && x.type === 'tool_use') names[x.id] = x.name; });
+    } else if (e.type === 'user') {
+      for (const r of toolResults(e)) {
+        const bytes = resultBytes(r.content);
+        if (!largest || bytes > largest.bytes) largest = { tool: names[r.tool_use_id] || '', bytes };
+      }
+    }
+  }
+  return { tokens, largest_kb: largest ? toKb(largest.bytes) : 0, largest_tool: largest ? largest.tool : null };
+}
+
+// Fills a subagent entry from its result line. `launch` is the line's top-level toolUseResult.
+function noteAgentResult(sub, result, launch) {
+  const info = launch && typeof launch === 'object' ? launch : {};
+  sub.async = info.isAsync === true || info.status === 'async_launched';
+  // A background agent's result is only the launch notice; its report arrives later.
+  sub.returned_kb = sub.async || result.is_error ? null : resultKb(result.content);
+  if (typeof info.agentId === 'string' && info.agentId) sub.agent_id = info.agentId;
+  if (typeof info.resolvedModel === 'string' && info.resolvedModel) sub.model_used = info.resolvedModel;
+}
+
+function emptyFacts(skill) {
+  return {
+    skill, found: false, start_time: null, end_time: null, tool_calls: 0, tool_errors: [],
+    excluded_errors: 0, rejections: [], subagents: [], user_messages: [], final_answer: '',
+    results: { count: 0, total_kb: 0, largest: [], oversize_errors: 0 },
+    tokens: emptyTokens(), started_by: null,
+  };
+}
+
+// options.readSubagent(agentId) returns a subagent transcript's lines, or null when it has none.
+function readRun(lines, skill, options = {}) {
+  const entries = parseEntries(lines);
 
   let start = -1;
   entries.forEach((e, i) => { if (startsRun(e, skill)) start = i; });
@@ -166,6 +206,7 @@ function readRun(lines, skill) {
   facts.start_time = entries[start].timestamp || null;
   facts.started_by = startedBy(entries, start);
   const toolNames = {};
+  const agentAt = {};
   const sizes = [];
   const seenMessages = new Set();
   // The call that starts the run only loads the skill; its result is not the skill's work.
@@ -207,7 +248,12 @@ function readRun(lines, skill) {
           toolNames[item.id] = item.name;
           if (SUBAGENT_TOOLS.has(item.name)) {
             const input = item.input || {};
-            facts.subagents.push({ type: input.subagent_type || 'general-purpose', description: input.description || '' });
+            agentAt[item.id] = facts.subagents.length;
+            facts.subagents.push({
+              type: input.subagent_type || 'general-purpose', description: input.description || '',
+              model_requested: input.model || null, model_used: null, agent_id: null, async: null,
+              tokens: null, largest_kb: null, largest_tool: null, returned_kb: null,
+            });
           }
         } else if (item.type === 'text' && item.text) {
           sawAssistantText = true;
@@ -223,6 +269,8 @@ function readRun(lines, skill) {
       for (const r of results) {
         const tool = toolNames[r.tool_use_id] || '';
         if (!launcher || r.tool_use_id !== launcher.id) sizes.push({ tool, bytes: resultBytes(r.content) });
+        // With several results in one line it is unclear which one toolUseResult describes.
+        if (agentAt[r.tool_use_id] !== undefined) noteAgentResult(facts.subagents[agentAt[r.tool_use_id]], r, results.length === 1 ? e.toolUseResult : null);
         if (!r.is_error) continue;
         const text = textOf(r.content);
         if (text.includes(REJECTION)) {
@@ -254,11 +302,36 @@ function readRun(lines, skill) {
   facts.results.largest = [...sizes].sort((a, b) => b.bytes - a.bytes).slice(0, TOP_RESULTS)
     .map((x) => ({ tool: x.tool, kb: toKb(x.bytes) }));
 
+  if (typeof options.readSubagent === 'function') {
+    for (const sub of facts.subagents) {
+      if (!sub.agent_id) continue;
+      try {
+        const subLines = options.readSubagent(sub.agent_id);
+        if (subLines) Object.assign(sub, measureSubagent(subLines));
+      } catch {
+        // An unreadable subagent transcript leaves its numbers null.
+      }
+    }
+  }
+
   // The answer is everything the assistant said in its final turn.
   const answer = turnTexts.join('\n\n');
   facts.final_answer = answer.length > 4000 ? answer.slice(-4000) : answer;
   facts.end_time = entries[end].timestamp || null;
   return facts;
+}
+
+// Reads a subagent's transcript, which Claude Code keeps beside the session transcript.
+function subagentReader(transcriptPath) {
+  const dir = path.join(String(transcriptPath).replace(/\.jsonl$/, ''), 'subagents');
+  return (agentId) => {
+    if (!/^[A-Za-z0-9_-]+$/.test(String(agentId))) return null;
+    try {
+      return fs.readFileSync(path.join(dir, `agent-${agentId}.jsonl`), 'utf8').split('\n');
+    } catch {
+      return null;
+    }
+  };
 }
 
 function main(argv) {
@@ -279,10 +352,10 @@ function main(argv) {
     process.stdout.write(JSON.stringify({ error: err.message }) + '\n');
     return 1;
   }
-  process.stdout.write(JSON.stringify(readRun(raw.split('\n'), skill)) + '\n');
+  process.stdout.write(JSON.stringify(readRun(raw.split('\n'), skill, { readSubagent: subagentReader(transcript) })) + '\n');
   return 0;
 }
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { readRun, isLikelyCorrection, resultKb };
+module.exports = { readRun, isLikelyCorrection, resultKb, subagentReader };
