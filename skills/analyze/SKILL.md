@@ -26,14 +26,16 @@ bare number.
 ## 1. Changed since last time
 
 List the entries in `<data_dir>/changes.md` dated on or after `last_analyze` in
-`config.json` (all of them when it is missing): id, skill, file, text or logic,
-status, why. Then Edit `config.json` to set `"last_analyze": "<now, ISO-8601>"`.
+`config.json` (all of them when it is missing): id, skill, file, kind (text, logic,
+connect or family), status, why. Then Edit `config.json` to set `"last_analyze": "<now, ISO-8601>"`.
 
 ## 2. Waiting fixes
 
 List the `pending` entries in `<data_dir>/proposals.md` (for the named skill only,
-when one is given), each with its before → after, why and evidence. Ask the user to
-approve or reject each, in one message, and wait for the answer.
+when one is given), each with its before → after (one per pair, naming its file, when
+it has `- file N:` lines), why and evidence. Say when one is marked
+`- untested: yes` — the run never managed what it adds. Ask the user to approve or
+reject each, in one message, and wait for the answer.
 
 - **Approve** → call the subagent `skill-coach:worker` with `plugin_root`,
   `data_dir`, the proposal's skill with its `skill_dir` and `rubric_path`,
@@ -42,16 +44,25 @@ approve or reject each, in one message, and wait for the answer.
   `- reason: <the user's words>`, and set the key's status in the notes back to
   `open`.
 
-## 3. Rates per skill
+## 3. Rates per skill and family
 
 For the period, per skill: runs (`run` lines in `ledger.jsonl`), scored runs (rows in
 the notes' Scores table), changes applied (`done` in `changes.md`, not counting kind
 `connect`), changes undone
 (`undone`), proposals waiting. A table, with denominators.
 
+Then group the skills by family. Run `node <plugin_root>/scripts/family.js --skill <skill>`
+once per skill seen in the period; a skill already listed among another's `members`
+needs no run of its own. For each family (`shared` not `null`), show next to the
+per-skill table: the family folder; its members that ran, out of all members; runs
+and scored runs, summed over the members; `family` changes applied and undone; and
+the repeated keys — problem keys in the notes of two or more members, each with the
+members it was seen in ("in 2 of 3 members").
+
 Count **rejections** from the `- rejected-by-undo:` lines in the notes — only the undo
 skill writes them, so a recovered or failed change is never counted as a rejection.
-For each change the user undid (not kind `connect`), read the same section of the file now. If the user
+For each change the user undid (not kind `connect`), read the same section of the file now (for a
+`family` change, the family file — its pair 1). If the user
 has since changed it themselves, that is an **edit**: add
 `- edited: <today> (<change id>): <one line on what the user wrote instead>` under the
 key in the notes (once per change), and show the difference.
