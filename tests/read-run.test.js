@@ -258,6 +258,19 @@ test('an over-limit result saved to a file is measured by its real size', () => 
   assert.equal(r.results.count, 2);
 });
 
+// The shape Claude Code writes when a built-in tool's output is too big to show: a short
+// preview, with the real size in the first line.
+const PERSISTED = `<persisted-output>\nOutput too large (60.6KB). Full output saved to: /tmp/x.txt\n\nPreview (first 2KB):\n${'y'.repeat(2 * 1024)}\n...\n</persisted-output>`;
+
+test('output Claude Code saved to a file is measured by its real size', () => {
+  const r = readRun([
+    SKILL_START('i0'), toolResult('i1', 's1', 'loaded'),
+    assistantTool('i2', 'b1', 'Bash', {}), toolResult('i3', 'b1', PERSISTED),
+  ], 'demo-skill');
+  assert.deepEqual(r.results.largest[0], { tool: 'Bash', kb: 60.6 });
+  assert.equal(r.results.oversize_errors, 0, 'shown as a preview, not refused');
+});
+
 test('a file that only quotes the over-limit phrase is not over the limit', () => {
   const quoted = `${'// a script that lists the errors it ignores\n'.repeat(10)}const EXCLUDED = [/exceeds maximum allowed tokens/];\n`;
   const r = readRun([

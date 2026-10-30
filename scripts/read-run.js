@@ -29,6 +29,9 @@ const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 const OVERSIZE = /exceeds maximum allowed tokens/;
 const OVERSIZE_HEAD = 300;
 const SAVED_SIZE = /result \(([\d,]+) characters/;
+// A built-in tool's output too big to show: Claude Code keeps a short preview and names
+// the real size in the first line.
+const PERSISTED_SIZE = /Output too large \(([\d.]+)\s*(KB|MB)\)/;
 // Loading a skill or a tool's schema is not the skill's work: these results never count.
 const UNCOUNTED_TOOLS = new Set(['Skill', 'ToolSearch']);
 const TOP_RESULTS = 3;
@@ -69,7 +72,11 @@ function resultKb(content) {
 function measure(content) {
   const bytes = resultBytes(content);
   const text = textOf(content).slice(0, OVERSIZE_HEAD);
-  if (!OVERSIZE.test(text)) return { bytes, over: false };
+  if (!OVERSIZE.test(text)) {
+    const p = PERSISTED_SIZE.exec(text);
+    const persisted = p ? Number(p[1]) * (p[2] === 'MB' ? 1024 * 1024 : 1024) : 0;
+    return { bytes: Math.max(bytes, Math.round(persisted)), over: false };
+  }
   const m = SAVED_SIZE.exec(text);
   const saved = m ? Number(m[1].replace(/,/g, '')) : 0;
   return { bytes: Math.max(bytes, saved), over: true };
