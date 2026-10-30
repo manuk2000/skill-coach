@@ -97,8 +97,8 @@ Settings).
   a [family](#skill-families). You are always asked, with "No family" as an answer,
   and no answer is suggested: the folder is only a guess from paths the skills
   mention. Your home folder, Claude Code's own folders (hooks, commands, agents,
-  skills, plugins and the like) and folders whose name suggests secrets are never
-  offered.
+  skills, plugins and the like), folders whose name suggests secrets, hidden folders
+  such as `~/.ssh` and system folders such as `/etc` are never offered.
 - Run it again on a skill you connected earlier to bring it up to date. It replaces the
   old pointer sentence with the current one and can add the family line, in one card
   you confirm. Its rules, its `Hand over:` line and its auto-fix setting stay as they

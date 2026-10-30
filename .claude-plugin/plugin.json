@@ -1,6 +1,6 @@
 {
   "name": "skill-coach",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Records every skill run, scores runs that had trouble, cost too much or asked for something new, and improves your skills with undoable automatic changes.",
   "author": {
     "name": "Manuk Asatryan",

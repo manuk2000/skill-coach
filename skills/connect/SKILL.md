@@ -65,8 +65,8 @@ the user gave one).
 ## Family
 
 `shared_candidates` lists folders holding files this skill reads that at least one
-other skill reads too (home, Claude Code's own config folders and secret-like folders
-are never listed). Notes stay per skill: the judge reads every member's notes, and
+other skill reads too (home, Claude Code's own config folders, secret-like folders, hidden
+folders such as `~/.ssh` and system folders such as `/etc` are never listed). Notes stay per skill: the judge reads every member's notes, and
 facts that two or more members use live once, in `.md` files of the shared folder.
 Ask it once, now, and pass the answer as `--shared '<folder>'` (single quotes, so `~`
 stays as written) on every `<plan>` run from here on.

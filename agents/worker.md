@@ -51,7 +51,8 @@ member started it. Never write a backup over a file. For each entry, Read the fi
 An entry with numbered pairs (kind `connect`, written by the connect skill, or kind
 `family`) is recovered as a whole. A `connect` entry's pairs are all in its one
 `- file:`; a `family` entry names each pair's file in its `- file N:` line. A pair has
-**landed** when its `after` occurs exactly once in its file and its `before` does not;
+**landed** when its `after` occurs exactly once in its file and its `before` occurs
+nowhere outside that `after` (an `after` that adds to its `before` contains it);
 a `before N: (new file)` pair has landed when its file exists. A pair is **untouched**
 when its `before` occurs exactly once and its `after` does not. Check every pair in
 every file first:

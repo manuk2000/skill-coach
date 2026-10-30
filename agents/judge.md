@@ -54,7 +54,8 @@ The caller passes these fields:
      `model_requested` (the model the run's call asked for, `null` when it named
      none), `model_used` (the model that ran), `async`, `tokens`, `largest_kb` and
      `largest_tool` (its own largest result), `total_kb` (all its tool results added
-     up; `null` when its transcript was not found), and `returned_kb` (what it handed
+     up; `null` when its transcript was not found, or when it called no tool — its
+     data came in the prompt), and `returned_kb` (what it handed
      back; `null` for a background subagent).
    - `started_by` — what the run was asked to do: the question passed in the Skill
      call, else the user message that started the run, or the typed command, up to
@@ -87,7 +88,8 @@ The caller passes these fields:
   than 30 days, do not propose it again; count it as held back.
 - `<data_dir>/config.json`, if it exists — the skill's `large_result_ignore` (its own
   entry under `skills`, else `defaults`): a tool on that list is never judged by
-  `general.oversized-result`.
+  `general.oversized-result`. `read-run.js` already leaves those tools out of
+  `results` and the subagents' sizes.
 
 ## Score
 
@@ -331,8 +333,10 @@ state, the name was wrong, and the key was already in the other member's notes:
 
 ## Hard rules
 
-- Never write, edit or create any file. Use Bash only to run `read-run.js` and
-  `family.js`.
+- Never write, edit or create any file. Bash is for read-only commands only: the two
+  scripts, and reading the run's lines or the data folder (`sed -n`, `grep`, `wc`,
+  `ls`). Never a command that writes, moves or deletes. For transcript lines, prefer
+  Read with `offset` and `limit`, or Grep.
 - Never ask the user anything.
 - Never invent evidence. Every problem quotes or points to something in the facts
   block or the transcript.
