@@ -424,6 +424,20 @@ test('only the folder of an existing file counts, and never an unsafe folder', (
   assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['~/.claude/demo-shared']);
 });
 
+test('hidden home folders and system folders are never candidates', () => {
+  const t = home();
+  touch(t.h, '~/.claude/demo-shared/facts.md', '~/.ssh/config', '~/.config/demo/settings.md');
+  const system = ['/etc/hosts', '/etc/shells'].find((f) => fs.existsSync(f));
+  const body = [
+    'Facts: ~/.claude/demo-shared/facts.md.',
+    'Keys: ~/.ssh/config and ~/.config/demo/settings.md.',
+    system ? `System: ${system}.` : '',
+  ].join('\n');
+  t.put(t.h, 'demo-a', skillWith('demo-a', body));
+  t.put(t.h, 'demo-b', skillWith('demo-b', body));
+  assert.deepEqual(sharedCandidates('demo-a', { home: t.h, cwd: t.project }), ['~/.claude/demo-shared']);
+});
+
 test('a project skill and a user skill can share a folder; results are sorted and unique', () => {
   const t = home();
   touch(t.h, '~/.claude/zeta-shared/a.md', '~/.claude/zeta-shared/b.md', '~/.claude/zeta-shared/c.md',

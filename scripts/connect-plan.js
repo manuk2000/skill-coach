@@ -235,6 +235,8 @@ const PATH_LIKE = /(?<![\w/:.~$}-])(?:~\/|\/)[^\s`'")\]]*/g;
 const CONFIG_FOLDERS = ['hooks', 'commands', 'agents', 'skills', 'plugins', 'projects', 'rules', 'output-styles', 'workflows'];
 // A folder whose path names a secret is never offered, whatever it holds.
 const SECRET_LIKE = /secret|credential|password|token/i;
+// System folders hold the machine's own settings, never a family's facts.
+const SYSTEM_ROOTS = ['/etc', '/usr', '/bin', '/sbin', '/System', '/Library', '/dev', '/proc', '/boot'];
 
 function isFile(p) {
   try {
@@ -280,7 +282,11 @@ function sharedCandidates(skill, { home, cwd, env = process.env, dir } = {}) {
   const never = [own, ...roots, path.join(homeDir, '.claude', 'self-improvement'), dataDir({ ...env, HOME: homeDir }),
     ...claudes.flatMap((c) => CONFIG_FOLDERS.map((name) => path.join(c, name)))];
   const tooBroad = new Set(['/', homeDir, ...claudes]);
-  const safe = (f) => !tooBroad.has(f) && !never.some((base) => under(f, base)) && !SECRET_LIKE.test(shown(f));
+  // A hidden folder in home (~/.ssh, ~/.config) holds account settings; only ~/.claude is used.
+  const hidden = (f) => under(f, homeDir) && /^\.(?!claude(?:\/|$))/.test(f.slice(homeDir.length + 1));
+  const system = (f) => !under(f, homeDir) && SYSTEM_ROOTS.some((root) => under(f, root));
+  const safe = (f) => !tooBroad.has(f) && !never.some((base) => under(f, base)) && !SECRET_LIKE.test(shown(f))
+    && !hidden(f) && !system(f);
   const mine = [...read(own)].filter(safe);
 
   const others = new Set();
