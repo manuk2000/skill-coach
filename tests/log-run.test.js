@@ -122,7 +122,7 @@ test('every run of a connected skill is announced with its session', () => {
   assert.equal(r.line.n, 1);
   const text = JSON.parse(r.output).hookSpecificOutput.additionalContext;
   assert.match(text, /run 1 of demo-skill recorded \(session 00000000-0000-0000-0000-000000000000\)/);
-  assert.match(text, /skill-coach:run-end/);
+  assert.match(text, /invoke skill-coach:run-end with demo-skill as its argument\./);
   assert.doesNotMatch(text, /spot check/);
 });
 

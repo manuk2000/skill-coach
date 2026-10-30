@@ -229,7 +229,7 @@ function main(mode, stdinText, env, now) {
     if (isConnected(skill, cwd, home)) {
       // Tells the chat which run this is, so run-end scores this session's run.
       const who = `session ${line.session}${line.agent ? `, agent ${line.agent}` : ''}`;
-      let note = `skill-coach: run ${n} of ${skill} recorded (${who}). At the end of this run, invoke skill-coach:run-end.`;
+      let note = `skill-coach: run ${n} of ${skill} recorded (${who}). At the end of this run, invoke skill-coach:run-end with ${skill} as its argument.`;
       if (n % SPOT_CHECK_EVERY === 0) note += ` skill-coach: spot check due for ${skill} — score this run even if nothing went wrong.`;
       output = JSON.stringify({
         hookSpecificOutput: {
