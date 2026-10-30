@@ -411,7 +411,7 @@ test('only the folder of an existing file counts, and never an unsafe folder', (
   const body = [
     'Facts: ~/.claude/demo-shared/facts.md.',
     'Projects: ~/all-projects/ and ~/all-projects/<repo>/README.md.',
-    'API: /api/v1/dashboards/uid and /api/v1/records/list.json.',
+    'API: /api/v1/items/latest and /api/v1/records/list.json.',
     'Secrets: ~/.claude/demo-secrets/server.env and ~/team-credentials/keys.md.',
     'Hooks: ~/.claude/hooks/check.js, ~/.claude/hooks/ and ~/.claude/commands/demo.md.',
     'Config: ~/.claude/agents/demo.md, ~/.claude/rules/demo.md, ~/.claude/output-styles/demo.md, ~/.claude/workflows/demo.md.',
