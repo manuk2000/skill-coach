@@ -162,9 +162,16 @@ function typedText(entry) {
 
 // What the user asked for before the run: the text of a typed command, or the last
 // genuine user message (or typed command) before a Skill-tool start.
-function startedBy(entries, start) {
+function startedBy(entries, start, skill) {
   const first = entries[start];
   if (first.type === 'user') return clip(typedText(first) || '', 500) || null;
+  // A question passed in the Skill call itself is what the run was asked to do.
+  const content = first.message && first.message.content;
+  const call = Array.isArray(content)
+    ? content.find((x) => x && x.type === 'tool_use' && x.name === 'Skill' && x.input && x.input.skill === skill)
+    : null;
+  const args = call && typeof call.input.args === 'string' ? call.input.args.trim() : '';
+  if (args) return clip(args, 500);
   for (let i = start - 1; i >= 0; i--) {
     const text = typedText(entries[i]) || genuineUserText(entries[i]);
     if (text !== null) return clip(text, 500);
@@ -247,7 +254,7 @@ function readRun(lines, skill, options = {}) {
 
   facts.found = true;
   facts.start_time = entries[start].timestamp || null;
-  facts.started_by = startedBy(entries, start);
+  facts.started_by = startedBy(entries, start, skill);
   const toolNames = {};
   const agentAt = {};
   const sizes = [];

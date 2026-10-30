@@ -369,6 +369,14 @@ test('the prompt that started the run is kept', () => {
   assert.equal(r.started_by, 'check the export and also list the failures');
 });
 
+test('a question passed in the Skill call is what started the run', () => {
+  const r = readRun([
+    userLine('n0', 'yes, go ahead'),
+    assistantTool('n1', 's1', 'Skill', { skill: 'demo-skill', args: 'how many failures, and which one is most common?' }),
+  ], 'demo-skill');
+  assert.equal(r.started_by, 'how many failures, and which one is most common?');
+});
+
 test('started_by is clipped, and null when nothing came before', () => {
   const clipped = readRun([userLine('o0', 'w'.repeat(900)), SKILL_START('o1')], 'demo-skill');
   assert.equal(clipped.started_by.length, 500);

@@ -56,8 +56,9 @@ The caller passes these fields:
      `largest_tool` (its own largest result), `total_kb` (all its tool results added
      up; `null` when its transcript was not found), and `returned_kb` (what it handed
      back; `null` for a background subagent).
-   - `started_by` — the user message that started the run, or the typed command, up
-     to 500 characters.
+   - `started_by` — what the run was asked to do: the question passed in the Skill
+     call, else the user message that started the run, or the typed command, up to
+     500 characters.
    - `user_messages` — what the user said, each flagged `likely_correction`.
    - `final_answer` — the answer the user received.
 2. Run `node <plugin_root>/scripts/family.js --skill <skill>`. It prints
