@@ -170,6 +170,17 @@ test("skill-coach's own lines after the call are not part of the answer", () => 
   assert.deepEqual(r.subagents, []);
 });
 
+test('run-end narration after an answer is not part of the answer', () => {
+  const r = readRun([
+    assistantTool('e0', 's1', 'Skill', { skill: 'demo-skill' }), toolResult('e1', 's1', 'loaded'),
+    assistantTool('e2', 'b1', 'Bash', {}), toolResult('e3', 'b1', 'ok'),
+    assistantText('e4', '3 of 9 lines match.'),
+    assistantTool('e5', 'r1', 'Skill', { skill: 'skill-coach:run-end' }), toolResult('e6', 'r1', 'loaded'),
+    assistantText('e7', 'The judge is scoring this run.'),
+  ], 'demo-skill');
+  assert.equal(r.final_answer, '3 of 9 lines match.');
+});
+
 test('text written before a tool call is in the answer; thinking is not', () => {
   // Claude Code stores each block of one response on its own line, so the text before a
   // tool call is a line of its own. Thinking blocks are never shown to the user.
@@ -485,11 +496,11 @@ test('a subagent that read many small files has a large total', () => {
   assert.equal(r.subagents[0].total_kb, 150);
 });
 
-test('a subagent with no tool calls has a total of 0', () => {
+test('a subagent with no tool calls has no known total: its data came in the prompt', () => {
   const readSubagent = () => [assistantMessage('z0', 'sm1', [{ type: 'text', text: 'answered from the prompt' }])];
   const r = readRun(agentRun({}, { agentId: 'a1', resolvedModel: 'm' }), 'demo-skill', { readSubagent });
   assert.equal(r.subagents[0].largest_kb, 0);
-  assert.equal(r.subagents[0].total_kb, 0);
+  assert.equal(r.subagents[0].total_kb, null);
 });
 
 test('an over-limit result inside a subagent is measured by its real size', () => {
@@ -553,4 +564,20 @@ test('CLI reads a subagent transcript next to the session transcript', () => {
   const r = spawnSync(process.execPath, [SCRIPT, '--transcript', path.join(dir, 'sess.jsonl'), '--skill', 'demo-skill'], { encoding: 'utf8' });
   assert.equal(r.status, 0);
   assert.equal(JSON.parse(r.stdout).subagents[0].largest_kb, 45);
+});
+
+test('CLI leaves out the tools the config ignores for the skill', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-ignore-'));
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ defaults: {}, skills: { 'demo-skill': { large_result_ignore: ['read_docs'] } } }));
+  const transcript = path.join(dir, 'run.jsonl');
+  fs.writeFileSync(transcript, [
+    SKILL_START('o0'), toolResult('o1', 's1', 'loaded'),
+    assistantTool('o2', 'd1', 'read_docs', {}), toolResult('o3', 'd1', 'd'.repeat(50 * 1024)),
+    assistantTool('o4', 'b1', 'Bash', {}), toolResult('o5', 'b1', 'b'.repeat(2 * 1024)),
+  ].join('\n'));
+  const r = spawnSync(process.execPath, [SCRIPT, '--transcript', transcript, '--skill', 'demo-skill'], {
+    encoding: 'utf8', env: { ...process.env, SKILL_COACH_DATA: dir },
+  });
+  assert.equal(r.status, 0);
+  assert.deepEqual(JSON.parse(r.stdout).results.largest[0], { tool: 'Bash', kb: 2 });
 });

@@ -202,6 +202,7 @@ function measureSubagent(lines, ignored = new Set()) {
   const names = {};
   let largest = null;
   let total = 0;
+  let results = 0;
   for (const e of entries) {
     const content = e.message && e.message.content;
     if (e.type === 'assistant') {
@@ -209,6 +210,7 @@ function measureSubagent(lines, ignored = new Set()) {
       if (Array.isArray(content)) content.forEach((x) => { if (x && x.type === 'tool_use') names[x.id] = x.name; });
     } else if (e.type === 'user') {
       for (const r of toolResults(e)) {
+        results += 1;
         const tool = names[r.tool_use_id] || '';
         if (!counts(tool, ignored)) continue;
         const { bytes } = measure(r.content);
@@ -218,7 +220,9 @@ function measureSubagent(lines, ignored = new Set()) {
     }
   }
   return {
-    tokens, largest_kb: largest ? toKb(largest.bytes) : 0, largest_tool: largest ? largest.tool : null, total_kb: toKb(total),
+    // A subagent that called no tool got its data in the prompt: its total is not known.
+    tokens, largest_kb: largest ? toKb(largest.bytes) : 0, largest_tool: largest ? largest.tool : null,
+    total_kb: results ? toKb(total) : null,
   };
 }
 
@@ -269,6 +273,9 @@ function readRun(lines, skill, options = {}) {
   const marker = entries.findIndex((e, i) => i > start && isCoachCall(e));
   let end = marker >= 0 ? marker : entries.length - 1;
   let turnTexts = [];
+  // Text after the end-of-run call is the answer only when none came before it;
+  // otherwise it is skill-coach's own narration.
+  let lateAnswer = null;
 
   for (let i = start; i < entries.length; i++) {
     const e = entries[i];
@@ -276,10 +283,11 @@ function readRun(lines, skill, options = {}) {
     if (marker >= 0 && i >= marker) {
       // Past the end-of-run call no tool work counts, but an answer printed after the
       // call is still the answer. The user's next message (a correction) ends the run.
+      if (lateAnswer === null) lateAnswer = turnTexts.length === 0;
       if (e.type === 'assistant' && Array.isArray(content)) {
         for (const item of content) {
           const text = item && item.type === 'text' && item.text ? withoutCoachLines(item.text) : '';
-          if (text) turnTexts.push(text);
+          if (text && lateAnswer) turnTexts.push(text);
         }
         continue;
       }
@@ -387,7 +395,7 @@ function subagentReader(transcriptPath) {
   };
 }
 
-function main(argv) {
+function main(argv, env = process.env) {
   const arg = (name) => {
     const i = argv.indexOf(name);
     return i >= 0 ? argv[i + 1] : undefined;
@@ -405,7 +413,11 @@ function main(argv) {
     process.stdout.write(JSON.stringify({ error: err.message }) + '\n');
     return 1;
   }
-  process.stdout.write(JSON.stringify(readRun(raw.split('\n'), skill, { readSubagent: subagentReader(transcript) })) + '\n');
+  // The tools the user's config leaves out for this skill, read the way the hook reads
+  // them. Required here, not at the top, because log-run.js requires this file.
+  const { dataDir, largeResultIgnore } = require('./log-run.js');
+  const ignoreTools = largeResultIgnore(dataDir(env), skill);
+  process.stdout.write(JSON.stringify(readRun(raw.split('\n'), skill, { readSubagent: subagentReader(transcript), ignoreTools })) + '\n');
   return 0;
 }
 
