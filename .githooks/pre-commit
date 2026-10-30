@@ -1,0 +1,3 @@
+#!/bin/sh
+# Hard rule: nothing private enters this public repo. Checks the staged changes.
+exec node "$(git rev-parse --show-toplevel)/scripts/privacy-check.js" --staged

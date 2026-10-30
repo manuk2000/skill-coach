@@ -1,0 +1,6 @@
+#!/bin/sh
+# Hard rule: nothing private enters this public repo. Checks every commit being pushed,
+# its patch and its message, then the whole tree.
+root="$(git rev-parse --show-toplevel)"
+node "$root/scripts/privacy-check.js" --pre-push || exit 1
+exec node "$root/scripts/privacy-check.js" --tree

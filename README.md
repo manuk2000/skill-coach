@@ -73,7 +73,12 @@ The full scoring rules are in [`criteria/general.md`](criteria/general.md).
 
 ## Development
 
+This repo is public: nothing from a private workplace may enter it. See
+[CLAUDE.md](CLAUDE.md) for the rule and the privacy check that enforces it.
+
 ```
+git config core.hooksPath .githooks   # once per clone: the privacy check runs on every commit and push
+node scripts/privacy-check.js --tree
 node --test 'tests/**/*.test.js'
 claude plugin validate --strict .claude-plugin/plugin.json
 claude plugin validate --strict agents
